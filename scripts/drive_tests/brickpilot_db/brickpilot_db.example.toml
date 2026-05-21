@@ -1,0 +1,17 @@
+# Copy to ~/.config/brickpilot/drive_db.toml and keep private.
+# PostgreSQL is the production source of truth on the MacBook Pro.
+database_url = "postgresql://brickpilot:CHANGE_ME@127.0.0.1:5432/brickpilot_drive"
+artifact_root = "~/BrickpilotDriveDB/artifacts"
+backup_root = "~/BrickpilotDriveDB/backups"
+api_bind = "127.0.0.1"
+api_port = 8766
+api_token = "CHANGE_ME_LOCAL_TOKEN"
+source_host_role = "macbook"
+privacy_default = "local-only"
+
+[postgres_setup]
+brew_install = "brew install postgresql@16"
+start_service = "brew services start postgresql@16"
+create_user = "createuser -P brickpilot"
+create_db = "createdb -O brickpilot brickpilot_drive"
+migrate = "python3 -m scripts.drive_tests.brickpilot_db.migrate --config ~/.config/brickpilot/drive_db.toml"

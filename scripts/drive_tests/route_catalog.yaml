@@ -1,0 +1,120 @@
+defaults:
+  warmup_skip_sec: 90
+  missing_stop_after: 5
+  thresholds:
+    pinned_output_abs: 0.98
+    pinned_burst_gap_sec: 0.20
+    lead_relaxed_drel_m: 50.0
+    lazy_deficit_mph: 5.0
+    lazy_accel_cmd_mps2: 0.5
+    lazy_min_duration_sec: 3.0
+    accel_event_start_deficit_mph: 5.0
+    accel_event_end_deficit_mph: 2.0
+    accel_event_min_speed_mph: 3.0
+    accel_event_min_duration_sec: 1.0
+    stop_go_start_mph: 0.5
+    stop_go_end_mph: 5.0
+
+routes:
+  - label: north_nevada_v2_baseline
+    model: North Nevada v2
+    route_id: 69da3021e107975f/00000072--98cc5dab2d
+    warmup_skip_sec: 90
+    weight_in_overall_score: 0.5
+    notes: Previous route; includes intentionally aggressive low-speed neighborhood turn, so do not over-weight pinned turn events.
+    settings:
+      exact_settings_uncertain: true
+
+  - label: tomb_raider_v16
+    model: Tomb Raider v16
+    route_id: 69da3021e107975f/00000078--1d548f0757
+    warmup_skip_sec: 90
+    weight_in_overall_score: 1.0
+    settings:
+      nnlc: off
+      enforce_torque_lateral_control: on
+      torque_control_tune_version: v0.0
+      hyundai_longitudinal_tuning: Predictive
+      scc_v: off
+      scc_m: off
+      personality: Aggressive
+      speed_limit_source: Map Priority
+
+  - label: op_10_v3
+    model: OP 10 v3
+    route_id: 69da3021e107975f/0000007a--10045b5c80
+    warmup_skip_sec: 90
+    weight_in_overall_score: 1.0
+    settings:
+      nnlc: off
+      enforce_torque_lateral_control: on
+      torque_control_tune_version: v0.0
+      hyundai_longitudinal_tuning: Predictive
+      scc_v: off
+      scc_m: off
+      personality: Aggressive
+      speed_limit_source: Map Priority
+
+  - label: wmi_v12
+    model: WMI v12
+    route_id: 69da3021e107975f/0000007c--840e41e752
+    warmup_skip_sec: 90
+    weight_in_overall_score: 1.0
+    settings:
+      nnlc: off
+      enforce_torque_lateral_control: on
+      torque_control_tune_version: v0.0
+      hyundai_longitudinal_tuning: Predictive
+      scc_v: off
+      scc_m: off
+      personality: Aggressive
+      speed_limit_source: Map Priority
+
+  - label: wmi_v12_sccv_on
+    model: WMI v12 + SCC-V
+    route_id: 69da3021e107975f/00000080--ffa23b3a27
+    warmup_skip_sec: 0
+    weight_in_overall_score: 1.0
+    notes: SCC-V/smart-vision test; subjective rough drive. Car had full EV charge, unlike the prior 2026-04-30 routes that were mostly hybrid with no EV charge. Already calibrated on this model, so no warmup/calibration exclusion is applied.
+    settings:
+      nnlc: off
+      enforce_torque_lateral_control: on
+      torque_control_tune_version: v0.0
+      hyundai_longitudinal_tuning: Predictive
+      scc_v: on
+      scc_m: off
+      personality: Aggressive
+      ev_charge_state: full
+      speed_limit_source: Map Priority
+
+  - label: op_10_v3_sccv_on
+    model: OP 10 v3 + SCC-V
+    route_id: 69da3021e107975f/00000082--9af834f4e0
+    warmup_skip_sec: 90
+    weight_in_overall_score: 1.0
+    notes: SCC-V/smart-vision test. Beginning of route included calibration after switching models, so post-warmup excludes the first 90 seconds.
+    settings:
+      nnlc: off
+      enforce_torque_lateral_control: on
+      torque_control_tune_version: v0.0
+      hyundai_longitudinal_tuning: Predictive
+      scc_v: on
+      scc_m: off
+      personality: Aggressive
+      speed_limit_source: Map Priority
+
+  - label: op_10_v3_combined_speed_limit_sccv_off
+    model: OP 10 v3 + Combined Speed Limit
+    route_id: 69da3021e107975f/00000084--1bd807f784
+    warmup_skip_sec: 90
+    weight_in_overall_score: 1.0
+    notes: SCC-V off. Speed limit source changed from map priority to combined. Quick backroad and neighborhood test.
+    settings:
+      nnlc: off
+      enforce_torque_lateral_control: on
+      torque_control_tune_version: v0.0
+      hyundai_longitudinal_tuning: Predictive
+      scc_v: off
+      scc_m: off
+      personality: Aggressive
+      speed_limit_source: Combined
