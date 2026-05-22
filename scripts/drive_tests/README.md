@@ -96,6 +96,19 @@ python3 scripts/drive_tests/compare_alpha_long_native_pacing.py \
 This writes a small Markdown decision report plus CSVs for telemetry and labels.
 It is intended for native/SCC mimic work such as 0.5.7.
 
+Preflight the 0.5.8 native rolling-lead micro-pacing policy and shadow variants
+from existing prelim exports:
+
+```bash
+BRICKPILOT_ANALYSIS_ROOT=~/BrickpilotDriveDB/analysis_exports \
+  python3 scripts/drive_tests/sweep_lead_pacing_058.py \
+  --output-dir ~/BrickpilotDriveDB/analysis_exports/lead_pacing_sweep_058_<stamp>
+```
+
+This writes route summaries, gate/block crosstabs, label overlap, event windows,
+and a Markdown report. Use it when changing lead-pacing target gaps, deadbands,
+rate limits, or block gates; it is not a stop-authority sweep.
+
 Sweep Brickpilot lateral steering smoothness candidates over DriveDB qlogs:
 
 ```bash

@@ -22,6 +22,12 @@ SUMMARY_FIELDS = (
   "stopAssistDelta",
   "stopDistanceBuffer",
   "leadPacingAssistDelta",
+  "leadPacingRawDelta",
+  "leadPacingLiveDelta",
+  "leadPacingDeltaAfterRateLimit",
+  "leadPacingBlockReason",
+  "leadPacingTtc",
+  "leadPacingModeAge",
 )
 
 LABELS_OF_INTEREST = (

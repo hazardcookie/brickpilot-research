@@ -42,6 +42,21 @@ LEAD_PACING_MODE_NAMES = {
   4: "coast",
 }
 
+LEAD_PACING_BLOCK_REASON_NAMES = {
+  0: "none",
+  1: "not_eligible",
+  2: "driver_override",
+  3: "high_lat",
+  4: "stop_priority",
+  5: "brake_blend",
+  6: "urgent_ttc",
+  7: "soft_regen_decel",
+  8: "deadband",
+  9: "entry_hold",
+  10: "rate_limit_zero",
+  11: "hard_suppressor",
+}
+
 FINAL_STOP_BLOCKED_REASON_NAMES = {
   0: "none",
   1: "no_final_source",
@@ -132,6 +147,22 @@ EVENT_CARD_FIELDS = (
   "leadPacingVRel",
   "leadPacingAssistDelta",
   "leadPacingJerkLimited",
+  "leadPacingPolicyVersion",
+  "leadPacingRawDelta",
+  "leadPacingLiveDelta",
+  "leadPacingDeltaAfterRateLimit",
+  "leadPacingGateMask",
+  "leadPacingBlockReason",
+  "leadPacingVLead",
+  "leadPacingTtc",
+  "leadPacingModeAge",
+  "leadPacingBrakeBlendContext",
+  "leadPacingRegenSoftContext",
+  "leadPacingRegenHardContext",
+  "leadPacingStopPriority",
+  "leadPacingDriverOverride",
+  "leadPacingHighLatDemand",
+  "leadPacingAppliedToATarget",
 )
 
 CAN_CARD_FIELDS = (
@@ -360,6 +391,7 @@ def build_event_cards(shadow_rows: list[dict[str, Any]], carstate_rows: list[dic
       "brake_state_mode": mode_name(shadow_bucket, "stopBrakeState", BRAKE_STATE_NAMES),
       "stop_mode": mode_name(shadow_bucket, "stopMode", STOP_MODE_NAMES),
       "lead_pacing_mode": mode_name(shadow_bucket, "leadPacingMode", LEAD_PACING_MODE_NAMES),
+      "lead_pacing_block_reason_mode": mode_name(shadow_bucket, "leadPacingBlockReason", LEAD_PACING_BLOCK_REASON_NAMES),
       "final_stop_blocked_reason_mode": mode_name(shadow_bucket, "finalStopBlockedReason", FINAL_STOP_BLOCKED_REASON_NAMES),
     }
     active_bucket = [row for row in shadow_bucket if as_bool(row.get("stopActive"))]
@@ -374,8 +406,10 @@ def build_event_cards(shadow_rows: list[dict[str, Any]], carstate_rows: list[dic
       card["dominant_active_source"] = "none"
     if longitudinal_active_bucket:
       card["dominant_active_lead_pacing_mode"] = mode_name(longitudinal_active_bucket, "leadPacingMode", LEAD_PACING_MODE_NAMES)
+      card["dominant_active_lead_pacing_block_reason"] = mode_name(longitudinal_active_bucket, "leadPacingBlockReason", LEAD_PACING_BLOCK_REASON_NAMES)
     else:
       card["dominant_active_lead_pacing_mode"] = "none"
+      card["dominant_active_lead_pacing_block_reason"] = "none"
     for field in EVENT_CARD_FIELDS:
       card.update(numeric_summary(shadow_bucket, field, ""))
     for field in CAN_CARD_FIELDS:
@@ -477,6 +511,8 @@ def run(prelim_dir: Path, out_dir: Path, route_id: str, window_sec: float, max_c
   stop_mode_rows = crosstab(shadow_rows, "stopMode", STOP_MODE_NAMES, active_only=True)
   lead_pacing_mode_rows = crosstab(shadow_rows, "leadPacingMode", LEAD_PACING_MODE_NAMES,
                                    active_only=True, active_field="longitudinalAssistActive")
+  lead_pacing_block_rows = crosstab(shadow_rows, "leadPacingBlockReason", LEAD_PACING_BLOCK_REASON_NAMES,
+                                    active_only=True, active_field="longitudinalAssistActive")
   blocked_reason_rows = crosstab(shadow_rows, "finalStopBlockedReason", FINAL_STOP_BLOCKED_REASON_NAMES, active_only=False)
   bucket_rows = crosstab(shadow_rows, "stopDebtBucket", BUCKET_NAMES, active_only=True)
   validity_rows = crosstab(shadow_rows, "stopRequiredDecelValid", {0: "invalid", 1: "valid"}, active_only=True)
@@ -489,6 +525,7 @@ def run(prelim_dir: Path, out_dir: Path, route_id: str, window_sec: float, max_c
   write_csv(out_dir / "active_stop_assist_by_reason.csv", reason_rows)
   write_csv(out_dir / "active_stop_assist_by_stop_mode.csv", stop_mode_rows)
   write_csv(out_dir / "active_lead_pacing_by_mode.csv", lead_pacing_mode_rows)
+  write_csv(out_dir / "active_lead_pacing_by_block_reason.csv", lead_pacing_block_rows)
   write_csv(out_dir / "final_stop_blocked_reason_mix.csv", blocked_reason_rows)
   write_csv(out_dir / "active_stop_assist_by_bucket.csv", bucket_rows)
   write_csv(out_dir / "active_stop_assist_by_required_decel_valid.csv", validity_rows)

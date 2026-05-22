@@ -186,6 +186,84 @@ Success is a native-like pacing shape: closer useful following, fewer
 `pacing_bad`/`follow_distance_too_far` labels, fewer driver interventions, and
 no missed-stop regression.
 
+## 0.5.8 Implementation Read
+
+0.5.8 is the native rolling-lead micro-pacing build:
+
+- No lateral changes.
+- No stop-authority increase.
+- No broader `final_stop_commit`.
+- No CAN candidate promoted to brake authority.
+- Live control stays in the existing post-planner/pre-LongControl Brickpilot
+  shaping path.
+
+The implemented 0.5.8 live policy uses a speed-shaped target gap and deadband,
+then applies only small signed deltas in valid rolling-lead contexts:
+
+- Positive pacing cap: `+0.10 m/s^2`.
+- Negative/coast pacing cap: `-0.16 m/s^2`.
+- Valid lead geometry: 6-70 m, ego speed at least 2 m/s, lead speed at least
+  2 m/s.
+- High-speed taper: begins above 18 m/s, zero above 28 m/s.
+- Entry hold: 0.35 s before first nonzero live pacing.
+- Rate limits: slower positive ramp, faster negative/release ramp.
+
+Hard live blocks:
+
+- driver gas, brake, or steering override
+- stop-stack priority, final-stop commit, urgent TTC, or active stop assist
+- high lateral demand or steering guard suppression
+- clear `0x065` brake-blend context
+- stationary/Auto Hold context
+- DEC/SCC turn context, radar/model mismatch, FCW/model-brake context
+
+PHEV CAN handling in 0.5.8:
+
+- `0x065.b3/b9/b11+b12/b14` forms the clear brake-blend context used as a live
+  pacing veto.
+- `0x0FA.b4` is logged and read as signed/wrapped energy context, not as raw
+  unsigned brake magnitude.
+- `0x0FA.b7` is light regen/energy context. It may soften positive pacing or
+  block it when paired with actual deceleration, but it is not enough by itself
+  to prove braking.
+- `0x0BA.b14` remains conditional context only and should not be treated as a
+  pure stationary/Auto Hold signal without low-speed/standstill confirmation.
+
+New `brickpilotShadow` telemetry for audit:
+
+- `leadPacingPolicyVersion`
+- `leadPacingRawDelta`
+- `leadPacingLiveDelta`
+- `leadPacingDeltaAfterRateLimit`
+- `leadPacingGateMask`
+- `leadPacingBlockReason`
+- `leadPacingVLead`
+- `leadPacingTtc`
+- `leadPacingModeAge`
+- `leadPacingBrakeBlendContext`
+- `leadPacingRegenSoftContext`
+- `leadPacingRegenHardContext`
+- `leadPacingStopPriority`
+- `leadPacingDriverOverride`
+- `leadPacingHighLatDemand`
+- `leadPacingAppliedToATarget`
+
+The preflight script is
+`scripts/drive_tests/sweep_lead_pacing_058.py`. It compares installable and
+shadow pacing variants across the current Alpha Long ON/OFF and 0.5.7 WMI
+routes. The current installable candidate passes the intended micro-pacing
+range on the lead-active Alpha ON routes:
+
+| Route | Setting | Active fraction of eligible rolling samples | Read |
+| --- | --- | ---: | --- |
+| `0000020f--2ecc9b6e08` | 0.5.6 Alpha ON, nnv2 | 0.174 | within target |
+| `00000213--ab5b813126` | 0.5.7 Alpha ON, WMI V12 | 0.144 | within target; fixes 444 of 2995 prior mode/nonzero-gap samples |
+| `00000207--a8c307d230` | 0.5.6 Alpha ON, WMI-ish reviewed | 0.150 | within target |
+
+The Alpha Long OFF reference prelims show no Brickpilot rolling-pacing eligible
+samples, which is expected because the native/OEM path is the reference shape
+rather than Brickpilot control output.
+
 ## 0.6.0 Target
 
 0.6.0 should be a Stop Stack release, not a knob release:
