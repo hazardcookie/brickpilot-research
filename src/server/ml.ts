@@ -1,9 +1,17 @@
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import type { Pool } from "pg";
 import type { BrickpilotPaths } from "./lib";
 import { getDataCatalog } from "./reconciliation";
-import type { MlOverview, MlVoiceLabelerRun } from "../shared/types";
+import type {
+  MlAlphaComparison,
+  MlCanAnalysis,
+  MlDriveAnalysisRun,
+  MlDriveTrendPoint,
+  MlOverview,
+  MlVoiceLabelerRun
+} from "../shared/types";
 
 function num(value: unknown): number {
   const n = Number(value);
@@ -73,10 +81,47 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+async function analysisDirs(paths: BrickpilotPaths, match: RegExp): Promise<Array<{ name: string; dir: string; mtimeMs: number }>> {
+  const analysisRoot = path.join(paths.dataRoot, "analysis_exports");
+  try {
+    const dirents = (await fsp.readdir(analysisRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && match.test(entry.name));
+    const rows = await Promise.all(dirents.map(async (entry) => {
+      const dir = path.join(analysisRoot, entry.name);
+      const stat = await fsp.stat(dir);
+      return { name: entry.name, dir, mtimeMs: stat.mtimeMs };
+    }));
+    return rows.sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
+  } catch {
+    return [];
+  }
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return null;
+}
+
 function relativeToDataRoot(paths: BrickpilotPaths, filePath: string): string {
   const rel = path.relative(paths.dataRoot, filePath);
   if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return filePath;
   return rel;
+}
+
+function reportPathFor(paths: BrickpilotPaths, runDir: string): string | null {
+  const reportPath = path.join(runDir, "report.md");
+  return fsPathExists(reportPath) ? relativeToDataRoot(paths, reportPath) : null;
+}
+
+function fsPathExists(filePath: string): boolean {
+  try {
+    return fs.existsSync(filePath);
+  } catch {
+    return false;
+  }
 }
 
 function labelFamily(taxonomy: Record<string, unknown>, target: string): string {
@@ -101,21 +146,10 @@ function aucBucket(value: number): string {
 }
 
 async function latestVoiceLabelerRun(paths: BrickpilotPaths): Promise<MlVoiceLabelerRun | null> {
-  const analysisRoot = path.join(paths.dataRoot, "analysis_exports");
-  let entries: Array<{ name: string; mtimeMs: number }>;
-  try {
-    const dirents = (await fsp.readdir(analysisRoot, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory() && entry.name.startsWith("ml_0325_voice_labeler_"));
-    entries = (await Promise.all(dirents.map(async (entry) => {
-      const stat = await fsp.stat(path.join(analysisRoot, entry.name));
-      return { name: entry.name, mtimeMs: stat.mtimeMs };
-    }))).sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
-  } catch {
-    return null;
-  }
+  const entries = await analysisDirs(paths, /^ml_.*voice_labeler/i);
 
   for (const entry of entries) {
-    const runDir = path.join(analysisRoot, entry.name);
+    const runDir = entry.dir;
     const summary = await readJsonFile<Record<string, unknown>>(path.join(runDir, "run_summary.json"), {});
     if (!Object.keys(summary).length) continue;
     const taxonomy = await readJsonFile<Record<string, unknown>>(path.join(runDir, "voice_label_taxonomy.json"), {});
@@ -266,7 +300,7 @@ async function latestVoiceLabelerRun(paths: BrickpilotPaths): Promise<MlVoiceLab
 
     const reportPath = path.join(runDir, "report.md");
     return {
-      title: String(summary.title || "Brickpilot 0.3.25 voice labeler ML pass"),
+      title: String(summary.title || "Voice labeler ML run"),
       analysis_name: String(summary.analysis_name || "ml_0325_voice_labeler"),
       created_at: typeof summary.created_at === "string" ? summary.created_at : null,
       output_dir: typeof summary.output_dir === "string" ? summary.output_dir : runDir,
@@ -302,8 +336,287 @@ async function latestVoiceLabelerRun(paths: BrickpilotPaths): Promise<MlVoiceLab
   return null;
 }
 
+function driveTrendFromSummary(summary: Record<string, unknown>, createdAt: string | null): MlDriveTrendPoint | null {
+  const route = summary.route as Record<string, unknown> | undefined;
+  const routeCounts = summary.route_counts as Record<string, unknown> | undefined;
+  const routeId = firstString(summary.route_id, route?.route_id);
+  if (!routeId) return null;
+  return {
+    route_id: routeId,
+    brickpilot_version: firstString(route?.brickpilot_version, (route?.software as Record<string, unknown> | undefined)?.brickpilot_version),
+    model_bundle: firstString(route?.model_bundle),
+    created_at: createdAt,
+    duration_sec: num(route?.duration_sec),
+    sample_count: num(routeCounts?.samples),
+    speed_avg_mph: num(routeCounts?.speed_avg_mph),
+    speed_max_mph: num(routeCounts?.speed_max_mph),
+    stopped_frac: num(routeCounts?.stopped_frac),
+    low_speed_frac: num(routeCounts?.low_speed_frac),
+    brake_pressed_frac: num(routeCounts?.brake_pressed_frac),
+    gas_pressed_frac: num(routeCounts?.gas_pressed_frac),
+    all_predictions: num(summary.all_predictions),
+    review_predictions: Array.isArray(summary.review_predictions) ? summary.review_predictions.length : num(summary.review_predictions)
+  };
+}
+
+async function latestDriveAnalysis(paths: BrickpilotPaths): Promise<MlDriveAnalysisRun | null> {
+  const entries = await analysisDirs(paths, /^prelim_/i);
+  for (const entry of entries) {
+    const summary = await readJsonFile<Record<string, unknown>>(path.join(entry.dir, "run_summary.json"), {});
+    const route = summary.route as Record<string, unknown> | undefined;
+    const routeCounts = summary.route_counts as Record<string, unknown> | undefined;
+    const routeId = firstString(summary.route_id, route?.route_id);
+    if (!routeId || !Object.keys(summary).length) continue;
+
+    const timelineRows = await readCsvFile(path.join(entry.dir, "prediction_timeline.csv"));
+    const labelSummaryRows = await readCsvFile(path.join(entry.dir, "prediction_label_summary.csv"));
+    const shadowRows = await readCsvFile(path.join(entry.dir, "brickpilot_shadow_summary.csv"));
+    const topPredictionSource = Array.isArray(summary.top_prediction_labels)
+      ? summary.top_prediction_labels as Array<Record<string, unknown>>
+      : labelSummaryRows;
+    const shadowLabels: Record<string, string> = {
+      nearStandstill: "Near standstill",
+      standstill: "Full stop",
+      longitudinalAssistActive: "Assist active",
+      longitudinalAssistShadowCandidate: "Assist opportunity",
+      stopActive: "Stop assist active",
+      stopShadowCandidate: "Stop opportunity",
+      brakePressed: "Brake pressed",
+      gasPressed: "Gas pressed"
+    };
+    const shadowMetrics = shadowRows
+      .filter((row) => row.field in shadowLabels)
+      .map((row) => ({
+        field: String(row.field || ""),
+        label: shadowLabels[String(row.field || "")],
+        value: num(row.true_frac || row.nonzero_frac || row.mean),
+        count: num(row.true_count || row.count)
+      }))
+      .slice(0, 8);
+
+    const reportPath = path.join(entry.dir, "report.md");
+    return {
+      title: `${firstString(route?.brickpilot_version, (route?.software as Record<string, unknown> | undefined)?.brickpilot_version) || "Latest"} post-drive analysis`,
+      analysis_name: entry.name,
+      created_at: firstString(summary.created_utc) || new Date(entry.mtimeMs).toISOString(),
+      relative_path: relativeToDataRoot(paths, entry.dir),
+      report_path: fs.existsSync(reportPath) ? relativeToDataRoot(paths, reportPath) : null,
+      route_id: routeId,
+      route_label: firstString(route?.route_label),
+      brickpilot_version: firstString(route?.brickpilot_version, (route?.software as Record<string, unknown> | undefined)?.brickpilot_version),
+      model_bundle: firstString(route?.model_bundle),
+      duration_sec: num(route?.duration_sec),
+      segment_count: num(route?.segment_count),
+      sample_count: num(routeCounts?.samples),
+      test_windows: num(summary.test_windows),
+      all_predictions: num(summary.all_predictions),
+      review_predictions: Array.isArray(summary.review_predictions) ? summary.review_predictions.length : num(summary.review_predictions),
+      trained_targets: num(summary.trained_targets),
+      speed_avg_mph: num(routeCounts?.speed_avg_mph),
+      speed_max_mph: num(routeCounts?.speed_max_mph),
+      stopped_frac: num(routeCounts?.stopped_frac),
+      low_speed_frac: num(routeCounts?.low_speed_frac),
+      brake_pressed_frac: num(routeCounts?.brake_pressed_frac),
+      gas_pressed_frac: num(routeCounts?.gas_pressed_frac),
+      shadow_metrics: shadowMetrics,
+      top_prediction_labels: topPredictionSource
+        .slice(0, 14)
+        .map((row) => {
+          const target = String(row.target || "");
+          return {
+            target,
+            family: labelFamily({}, target),
+            intervals: num(row.intervals),
+            seconds: num(row.seconds),
+            best_peak_score: num(row.best_peak_score),
+            best_start_sec: num(row.best_start_sec),
+            best_end_sec: num(row.best_end_sec),
+            best_reason: String(row.best_reason || "")
+          };
+        }),
+      prediction_timeline: timelineRows
+        .map((row) => {
+          const target = String(row.target || "");
+          return {
+            target,
+            family: labelFamily({}, target),
+            start_sec: num(row.start_sec),
+            end_sec: num(row.end_sec),
+            peak_score: num(row.peak_score),
+            rank: num(row.rank)
+          };
+        })
+        .sort((a, b) => a.start_sec - b.start_sec || a.rank - b.rank)
+        .slice(0, 180)
+    };
+  }
+  return null;
+}
+
+async function driveAnalysisTrend(paths: BrickpilotPaths): Promise<MlDriveTrendPoint[]> {
+  const entries = (await analysisDirs(paths, /^prelim_/i)).slice(0, 12);
+  const points: MlDriveTrendPoint[] = [];
+  for (const entry of entries) {
+    const summary = await readJsonFile<Record<string, unknown>>(path.join(entry.dir, "run_summary.json"), {});
+    const point = driveTrendFromSummary(summary, firstString(summary.created_utc) || new Date(entry.mtimeMs).toISOString());
+    if (point) points.push(point);
+  }
+  return points.reverse();
+}
+
+function alphaGroupLabel(value: string): string {
+  if (/off|native|reference/i.test(value)) return "Native / OFF";
+  if (/_on_|brickpilot|stop/i.test(value)) return "Alpha Long ON";
+  return value.replaceAll("_", " ");
+}
+
+async function latestAlphaComparison(paths: BrickpilotPaths): Promise<MlAlphaComparison | null> {
+  const entries = await analysisDirs(paths, /^alpha_long_on_off_compare_/i);
+  for (const entry of entries) {
+    const summary = await readJsonFile<Record<string, unknown>>(path.join(entry.dir, "run_summary.json"), {});
+    const groupRows = await readCsvFile(path.join(entry.dir, "alpha_on_off_group_means.csv"));
+    const routeRows = await readCsvFile(path.join(entry.dir, "alpha_on_off_route_metrics.csv"));
+    if (!groupRows.length && !routeRows.length) continue;
+    const stopBuckets = (await readCsvFile(path.join(entry.dir, "alpha_on_off_stop_buckets.csv")))
+      .map((row) => ({
+        context: String(row.context || ""),
+        comparison_group: String(row.comparison_group || ""),
+        samples: num(row.samples),
+        frac: num(row.frac)
+      }))
+      .filter((row) => row.samples > 0)
+      .sort((a, b) => b.samples - a.samples)
+      .slice(0, 12);
+    const activeStopReasons = (await readCsvFile(path.join(entry.dir, "alpha_on_off_active_stop_reasons.csv")))
+      .map((row) => ({
+        value: String(row.value || ""),
+        comparison_group: String(row.comparison_group || ""),
+        samples: num(row.samples),
+        frac: num(row.frac)
+      }))
+      .filter((row) => row.samples > 0)
+      .sort((a, b) => b.samples - a.samples)
+      .slice(0, 12);
+    const reportPath = path.join(entry.dir, "report.md");
+    return {
+      title: "Alpha Long ON/OFF comparison",
+      created_at: new Date(entry.mtimeMs).toISOString(),
+      relative_path: relativeToDataRoot(paths, entry.dir),
+      report_path: fs.existsSync(reportPath) ? relativeToDataRoot(paths, reportPath) : null,
+      routes: Array.isArray(summary.routes) ? summary.routes.length : routeRows.length,
+      groups: groupRows.map((row) => {
+        const group = String(row.comparison_group || "");
+        return {
+          comparison_group: group,
+          label: alphaGroupLabel(group),
+          routes: num(row.routes),
+          stopped_frac: num(row.stopped_frac_mean),
+          low_speed_frac: num(row.low_speed_frac_mean),
+          lead_frac: num(row.lead_frac_mean),
+          brake_pressed_frac: num(row.brake_pressed_frac_mean),
+          gas_pressed_frac: num(row.gas_pressed_frac_mean),
+          assist_active_frac: num(row.longitudinalAssistActive_nonzero_frac_mean),
+          stop_active_frac: num(row.stopActive_nonzero_frac_mean),
+          planner_debt: num(row.stopPlannerDebt_mean_mean),
+          controller_debt: num(row.stopControllerDebt_mean_mean),
+          brake_debt: num(row.stopBrakeDebt_mean_mean),
+          good_stop_labels: num(row.good_stop_labels_mean),
+          bad_brake_labels: num(row.bad_brake_labels_mean),
+          driver_intervention_labels: num(row.driver_brake_intervention_labels_mean),
+          stop_complete_labels: num(row.stop_complete_labels_mean),
+          stop_go_bad_labels: num(row.stop_go_bad_labels_mean),
+          unnecessary_braking_labels: num(row.unnecessary_braking_labels_mean)
+        };
+      }),
+      route_metrics: routeRows.slice(0, 10).map((row) => ({
+        route_id: String(row.route_id || ""),
+        version: String(row.version || ""),
+        comparison_group: String(row.comparison_group || ""),
+        note: String(row.note || ""),
+        duration_sec: num(row.duration_sec),
+        avg_speed_mph: num(row.avg_speed_mph),
+        stopped_frac: num(row.stopped_frac),
+        low_speed_frac: num(row.low_speed_frac),
+        lead_frac: num(row.lead_frac),
+        brake_pressed_frac: num(row.brake_pressed_frac),
+        gas_pressed_frac: num(row.gas_pressed_frac),
+        assist_active_frac: num(row.longitudinalAssistActive_nonzero_frac),
+        stop_active_frac: num(row.stopActive_nonzero_frac),
+        good_stop_labels: num(row.good_stop_labels),
+        bad_brake_labels: num(row.bad_brake_labels),
+        driver_brake_intervention_labels: num(row.driver_brake_intervention_labels),
+        stop_complete_labels: num(row.stop_complete_labels),
+        stop_go_bad_labels: num(row.stop_go_bad_labels),
+        unnecessary_braking_labels: num(row.unnecessary_braking_labels)
+      })),
+      stop_buckets: stopBuckets,
+      active_stop_reasons: activeStopReasons
+    };
+  }
+  return null;
+}
+
+async function latestCanAnalysis(paths: BrickpilotPaths): Promise<MlCanAnalysis | null> {
+  const entries = await analysisDirs(paths, /^phev_can_/i);
+  for (const entry of entries) {
+    const summary = await readJsonFile<Record<string, unknown>>(path.join(entry.dir, "run_summary.json"), {});
+    if (!Object.keys(summary).length) continue;
+    const effectsSource = Array.isArray(summary.top_effects)
+      ? summary.top_effects as Array<Record<string, unknown>>
+      : await readCsvFile(path.join(entry.dir, "label_candidate_effects.csv"));
+    const routeCandidates = (await readCsvFile(path.join(entry.dir, "route_candidate_summary.csv")))
+      .map((row) => ({
+        field: String(row.field || ""),
+        count: num(row.count),
+        mean: num(row.mean),
+        max: num(row.max),
+        match_frac: num(row.fa_b4_bus0_bus130_match_frac)
+      }))
+      .filter((row) => row.field)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+    const reportPath = path.join(entry.dir, "report.md");
+    return {
+      title: "PHEV CAN signal analysis",
+      created_at: firstString(summary.created_utc) || new Date(entry.mtimeMs).toISOString(),
+      relative_path: relativeToDataRoot(paths, entry.dir),
+      report_path: fs.existsSync(reportPath) ? relativeToDataRoot(paths, reportPath) : null,
+      routes: Array.isArray(summary.routes) ? summary.routes.length : num(summary.routes),
+      frame_rows: num(summary.frame_rows),
+      decoded_field_rows: num(summary.decoded_field_rows),
+      route_summary_rows: num(summary.route_summary_rows),
+      label_effect_rows: num(summary.label_effect_rows),
+      test_interval_rows: num(summary.test_interval_rows),
+      top_effects: effectsSource.slice(0, 10).map((row) => ({
+        target: String(row.target || ""),
+        field: String(row.field || ""),
+        pos_count: num(row.pos_count),
+        background_count: num(row.background_count),
+        pos_mean: num(row.pos_mean),
+        background_mean: num(row.background_mean),
+        effect: num(row.effect),
+        abs_effect: num(row.abs_effect),
+        interpretation_status: String(row.interpretation_status || "")
+      })),
+      route_candidates: routeCandidates
+    };
+  }
+  return null;
+}
+
 export async function getMlOverview(pool: Pool, paths: BrickpilotPaths): Promise<MlOverview> {
-  const [counts, reviewStatus, modelCoverage, recentRoutes, catalog, voiceLabelerRun] = await Promise.all([
+  const [
+    counts,
+    reviewStatus,
+    modelCoverage,
+    recentRoutes,
+    catalog,
+    voiceLabelerRun,
+    driveAnalysis,
+    alphaComparison,
+    canAnalysis,
+    analysisTrend
+  ] = await Promise.all([
     pool.query(`
       SELECT
         (SELECT COUNT(*) FROM routes) AS routes,
@@ -359,7 +672,11 @@ export async function getMlOverview(pool: Pool, paths: BrickpilotPaths): Promise
       LIMIT 8
     `),
     getDataCatalog(paths),
-    latestVoiceLabelerRun(paths)
+    latestVoiceLabelerRun(paths),
+    latestDriveAnalysis(paths),
+    latestAlphaComparison(paths),
+    latestCanAnalysis(paths),
+    driveAnalysisTrend(paths)
   ]);
 
   const countRow = counts.rows[0] || {};
@@ -423,6 +740,10 @@ export async function getMlOverview(pool: Pool, paths: BrickpilotPaths): Promise
       segment_count: num(row.segment_count)
     })),
     recent_reports: reports,
-    latest_voice_labeler_run: voiceLabelerRun
+    latest_voice_labeler_run: voiceLabelerRun,
+    latest_drive_analysis: driveAnalysis,
+    latest_alpha_comparison: alphaComparison,
+    latest_can_analysis: canAnalysis,
+    analysis_trend: analysisTrend
   };
 }

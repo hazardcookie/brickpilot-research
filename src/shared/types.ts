@@ -194,6 +194,10 @@ export interface MlOverview {
   recent_routes: Array<{ route_id: string; label: string; started_at: string | null; model_bundle: string | null; brickpilot_version: string | null; segment_count: number }>;
   recent_reports: Array<{ title: string; kind: string; relative_path: string; mtime: string | null; size_bytes: number; route_ids: string[]; summary: string }>;
   latest_voice_labeler_run: MlVoiceLabelerRun | null;
+  latest_drive_analysis: MlDriveAnalysisRun | null;
+  latest_alpha_comparison: MlAlphaComparison | null;
+  latest_can_analysis: MlCanAnalysis | null;
+  analysis_trend: MlDriveTrendPoint[];
 }
 
 export interface MlVoiceLabelerRun {
@@ -263,4 +267,142 @@ export interface MlVoiceLabelerRun {
     effect: number;
     interpretation_status: string;
   }>;
+}
+
+export interface MlDriveTrendPoint {
+  route_id: string;
+  brickpilot_version: string | null;
+  model_bundle: string | null;
+  created_at: string | null;
+  duration_sec: number;
+  sample_count: number;
+  speed_avg_mph: number;
+  speed_max_mph: number;
+  stopped_frac: number;
+  low_speed_frac: number;
+  brake_pressed_frac: number;
+  gas_pressed_frac: number;
+  all_predictions: number;
+  review_predictions: number;
+}
+
+export interface MlDriveAnalysisRun {
+  title: string;
+  analysis_name: string;
+  created_at: string | null;
+  relative_path: string;
+  report_path: string | null;
+  route_id: string;
+  route_label: string | null;
+  brickpilot_version: string | null;
+  model_bundle: string | null;
+  duration_sec: number;
+  segment_count: number;
+  sample_count: number;
+  test_windows: number;
+  all_predictions: number;
+  review_predictions: number;
+  trained_targets: number;
+  speed_avg_mph: number;
+  speed_max_mph: number;
+  stopped_frac: number;
+  low_speed_frac: number;
+  brake_pressed_frac: number;
+  gas_pressed_frac: number;
+  shadow_metrics: Array<{ field: string; label: string; value: number; count: number }>;
+  top_prediction_labels: Array<{
+    target: string;
+    family: string;
+    intervals: number;
+    seconds: number;
+    best_peak_score: number;
+    best_start_sec: number;
+    best_end_sec: number;
+    best_reason: string;
+  }>;
+  prediction_timeline: Array<{
+    target: string;
+    family: string;
+    start_sec: number;
+    end_sec: number;
+    peak_score: number;
+    rank: number;
+  }>;
+}
+
+export interface MlAlphaComparison {
+  title: string;
+  created_at: string | null;
+  relative_path: string;
+  report_path: string | null;
+  routes: number;
+  groups: Array<{
+    comparison_group: string;
+    label: string;
+    routes: number;
+    stopped_frac: number;
+    low_speed_frac: number;
+    lead_frac: number;
+    brake_pressed_frac: number;
+    gas_pressed_frac: number;
+    assist_active_frac: number;
+    stop_active_frac: number;
+    planner_debt: number;
+    controller_debt: number;
+    brake_debt: number;
+    good_stop_labels: number;
+    bad_brake_labels: number;
+    driver_intervention_labels: number;
+    stop_complete_labels: number;
+    stop_go_bad_labels: number;
+    unnecessary_braking_labels: number;
+  }>;
+  route_metrics: Array<{
+    route_id: string;
+    version: string;
+    comparison_group: string;
+    note: string;
+    duration_sec: number;
+    avg_speed_mph: number;
+    stopped_frac: number;
+    low_speed_frac: number;
+    lead_frac: number;
+    brake_pressed_frac: number;
+    gas_pressed_frac: number;
+    assist_active_frac: number;
+    stop_active_frac: number;
+    good_stop_labels: number;
+    bad_brake_labels: number;
+    driver_brake_intervention_labels: number;
+    stop_complete_labels: number;
+    stop_go_bad_labels: number;
+    unnecessary_braking_labels: number;
+  }>;
+  stop_buckets: Array<{ context: string; comparison_group: string; samples: number; frac: number }>;
+  active_stop_reasons: Array<{ value: string; comparison_group: string; samples: number; frac: number }>;
+}
+
+export interface MlCanAnalysis {
+  title: string;
+  created_at: string | null;
+  relative_path: string;
+  report_path: string | null;
+  routes: number;
+  frame_rows: number;
+  decoded_field_rows: number;
+  route_summary_rows: number;
+  label_effect_rows: number;
+  test_interval_rows: number;
+  top_effects: Array<{
+    target: string;
+    field: string;
+    pos_count: number;
+    background_count: number;
+    pos_mean: number;
+    background_mean: number;
+    effect: number;
+    abs_effect: number;
+    interpretation_status: string;
+  }>;
+  route_candidates: Array<{ field: string; count: number; mean: number; max: number; match_frac: number }>;
 }

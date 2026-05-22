@@ -1,6 +1,7 @@
 import express from "express";
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Request, Response, NextFunction } from "express";
@@ -99,7 +100,7 @@ loadDotEnv(path.join(projectRoot, ".env"));
 const paths = defaultPaths();
 const app = express();
 const port = Number(process.env.BRICKPILOT_UI_PORT || 8791);
-const bind = process.env.BRICKPILOT_UI_BIND || "127.0.0.1";
+const bind = process.env.BRICKPILOT_UI_BIND || "0.0.0.0";
 
 const pool = await createPool(paths);
 await ensureDynamicReviewJobs(pool);
@@ -138,6 +139,13 @@ function toolsPythonEnv(): NodeJS.ProcessEnv {
     BRICKPILOT_DRIVE_DB_CONFIG: paths.dbConfigPath,
     PYTHONPATH: [paths.toolsRoot, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)
   };
+}
+
+function localNetworkUrls(portNumber: number): string[] {
+  return Object.values(os.networkInterfaces())
+    .flatMap((interfaces) => interfaces || [])
+    .filter((item) => item.family === "IPv4" && !item.internal)
+    .map((item) => `http://${item.address}:${portNumber}`);
 }
 
 async function generateReviewVideo(routeId: string): Promise<Record<string, unknown>> {
@@ -568,7 +576,12 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 const server = app.listen(port, bind, () => {
-  console.log(`Brickpilot unified UI listening on http://${bind}:${port}`);
+  console.log(`Brickpilot unified UI listening on http://127.0.0.1:${port}`);
+  if (bind === "0.0.0.0" || bind === "::") {
+    for (const url of localNetworkUrls(port)) console.log(`Brickpilot LAN URL: ${url}`);
+  } else {
+    console.log(`Brickpilot bind address: http://${bind}:${port}`);
+  }
   console.log(`Drive data root: ${paths.dataRoot}`);
 });
 

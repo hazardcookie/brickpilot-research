@@ -23,7 +23,9 @@ npm install
 npm run dev
 ```
 
-The app listens on `http://127.0.0.1:8791`.
+The app listens on `http://127.0.0.1:8791` and, by default, binds to all local
+network interfaces so another device on the same Wi-Fi can open the printed LAN
+URL.
 
 Configure paths with environment variables or a local `.env` file:
 
@@ -33,6 +35,7 @@ export BRICKPILOT_TOOLS_ROOT=/path/to/brickpilot-research
 export BRICKPILOT_PYTHON=python3
 export BRICKPILOT_DATA_ROOT=$HOME/BrickpilotDriveDB
 export BRICKPILOT_DRIVE_DB_CONFIG=$HOME/.config/brickpilot/drive_db.toml
+export BRICKPILOT_UI_BIND=0.0.0.0
 ```
 
 `BRICKPILOT_DRIVE_DB_ROOT` is accepted as a compatibility alias for

@@ -6,6 +6,10 @@ import type {
   IngestProgress,
   IngestRideType,
   IngestRun,
+  MlAlphaComparison,
+  MlCanAnalysis,
+  MlDriveAnalysisRun,
+  MlDriveTrendPoint,
   MediaStatus,
   MlOverview,
   MlVoiceLabelerRun,
@@ -93,6 +97,16 @@ function fmtScore(value?: number | null): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function fmtPct(value?: number | null, digits = 0): string {
+  if (value == null || !Number.isFinite(value)) return "0%";
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
+function fmtNumber(value?: number | null, digits = 1): string {
+  if (value == null || !Number.isFinite(value)) return "0";
+  return value.toFixed(digits);
+}
+
 function fmtClockSeconds(value?: number | null): string {
   const total = Math.max(0, Math.round(Number(value || 0)));
   const minutes = Math.floor(total / 60);
@@ -106,6 +120,13 @@ function fmtRouteWindow(start?: number | null, end?: number | null): string {
 
 function labelText(value: string): string {
   return String(value || "").replaceAll("_", " ");
+}
+
+function shortRoute(value?: string | null): string {
+  const text = String(value || "");
+  const match = /^0*([0-9a-f]+)--([0-9a-f]+)/i.exec(text);
+  if (match) return `${match[1]}-${match[2].slice(0, 8)}`;
+  return text.length > 14 ? text.replace(/^00000/, "") : text;
 }
 
 function clipText(value: string, max = 110): string {
@@ -124,6 +145,22 @@ const FAMILY_COLORS: Record<string, string> = {
 
 function familyColor(family?: string): string {
   return FAMILY_COLORS[String(family || "")] || "#8b949e";
+}
+
+function familyForTarget(target: string): string {
+  if (target.startsWith("group_phev") || /^phev_|ev_light_|ice_engine_|eco_mode|electric_mode|automatic_mode|hybrid_mode|sport_mode|power_meter_/.test(target)) return "phev";
+  if (target.includes("brake") || target.includes("stop") || target.startsWith("accel") || target === "driver_gas" || target === "driver_brake") return "longitudinal";
+  if (target.startsWith("steering") || target.startsWith("turn_signal")) return "lateral";
+  if (target.startsWith("quality") || target === "smooth_driving") return "quality";
+  if (target.startsWith("gear") || ["set_speed", "comma_engaged", "comma_disengaged", "cruise_button_press"].includes(target)) return "drive_control";
+  if (/parking|hvac|charger|headlight/.test(target)) return "accessory";
+  return "other";
+}
+
+function signalStatusText(value?: string): string {
+  const text = String(value || "");
+  if (/candidate|correlation|dbc|semantics|decoded/i.test(text)) return "candidate match";
+  return labelText(text || "candidate match");
 }
 
 function MiniBarChart({
@@ -639,6 +676,312 @@ function RlQueue() {
   );
 }
 
+function SignalTimeline({
+  timeline,
+  durationSec,
+  title
+}: {
+  timeline: MlDriveAnalysisRun["prediction_timeline"];
+  durationSec: number;
+  title: string;
+}) {
+  const duration = Math.max(1, durationSec || Math.max(...timeline.map((row) => row.end_sec), 1));
+  const familyOrder = ["phev", "longitudinal", "drive_control", "lateral", "accessory", "quality", "other"];
+  const families = familyOrder.filter((family) => timeline.some((row) => row.family === family));
+  const lanes = families.length ? families : ["other"];
+  const laneHeight = 18;
+  const top = 22;
+  const width = 1000;
+  const height = top + lanes.length * laneHeight + 28;
+  const ticks = [0, duration * 0.25, duration * 0.5, duration * 0.75, duration];
+  return (
+    <div className="timelineWrap">
+      <svg className="predictionTimeline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
+        <line x1="0" x2={width} y1={height - 20} y2={height - 20} />
+        {ticks.map((tick) => {
+          const x = (tick / duration) * width;
+          return (
+            <g key={tick}>
+              <line className="tick" x1={x} x2={x} y1="10" y2={height - 16} />
+              <text x={Math.min(width - 42, x + 4)} y={height - 4}>{fmtClockSeconds(tick)}</text>
+            </g>
+          );
+        })}
+        {lanes.map((family, index) => {
+          const y = top + index * laneHeight;
+          return (
+            <g key={family}>
+              <text className="laneLabel" x="4" y={y + 12}>{labelText(family)}</text>
+              <line className="laneLine" x1="118" x2={width} y1={y + 8} y2={y + 8} />
+            </g>
+          );
+        })}
+        {timeline.map((row, index) => {
+          const lane = Math.max(0, lanes.indexOf(row.family));
+          const x = Math.max(118, (row.start_sec / duration) * width);
+          const w = Math.max(3, ((row.end_sec - row.start_sec) / duration) * width);
+          const y = top + lane * laneHeight + 2;
+          return (
+            <rect
+              key={`${row.rank}-${row.target}-${row.start_sec}-${index}`}
+              x={x}
+              y={y}
+              width={Math.min(width - x, w)}
+              height="12"
+              rx="2"
+              fill={familyColor(row.family)}
+              opacity={0.42 + Math.min(0.5, row.peak_score * 0.5)}
+            >
+              <title>{labelText(row.target)} {fmtRouteWindow(row.start_sec, row.end_sec)} · {fmtScore(row.peak_score)}</title>
+            </rect>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function TrendLineChart({ points }: { points: MlDriveTrendPoint[] }) {
+  if (points.length < 2) return <p className="muted">More post-drive runs are needed for a trend line.</p>;
+  const width = 760;
+  const height = 210;
+  const padX = 38;
+  const padY = 24;
+  const plotW = width - padX * 2;
+  const plotH = height - padY * 2;
+  const metrics: Array<{ key: keyof MlDriveTrendPoint; label: string; color: string }> = [
+    { key: "low_speed_frac", label: "low speed", color: "#58a6ff" },
+    { key: "stopped_frac", label: "stopped", color: "#f778ba" },
+    { key: "brake_pressed_frac", label: "brake", color: "#d29922" },
+    { key: "gas_pressed_frac", label: "gas", color: "#56d4dd" }
+  ];
+  const xFor = (index: number) => padX + (points.length === 1 ? 0 : (index / (points.length - 1)) * plotW);
+  const yFor = (value: number) => padY + plotH - Math.max(0, Math.min(1, value)) * plotH;
+  return (
+    <div className="trendChartWrap">
+      <svg className="trendChart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Recent post-drive context trend">
+        {[0, 0.25, 0.5, 0.75, 1].map((tick) => (
+          <g key={tick}>
+            <line x1={padX} x2={width - padX} y1={yFor(tick)} y2={yFor(tick)} />
+            <text x="6" y={yFor(tick) + 4}>{fmtPct(tick)}</text>
+          </g>
+        ))}
+        {points.map((point, index) => (
+          <text className="xLabel" key={point.route_id} x={xFor(index)} y={height - 4} textAnchor={index === 0 ? "start" : index === points.length - 1 ? "end" : "middle"}>
+            {point.brickpilot_version || shortRoute(point.route_id)}
+          </text>
+        ))}
+        {metrics.map((metric) => {
+          const d = points.map((point, index) => {
+            const value = Number(point[metric.key] || 0);
+            return `${index === 0 ? "M" : "L"} ${xFor(index).toFixed(1)} ${yFor(value).toFixed(1)}`;
+          }).join(" ");
+          return <path key={metric.key} d={d} fill="none" stroke={metric.color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />;
+        })}
+        {metrics.map((metric) => points.map((point, index) => (
+          <circle key={`${metric.key}-${point.route_id}`} cx={xFor(index)} cy={yFor(Number(point[metric.key] || 0))} r="3" fill={metric.color}>
+            <title>{metric.label} · {fmtPct(Number(point[metric.key] || 0), 1)} · {shortRoute(point.route_id)}</title>
+          </circle>
+        )))}
+      </svg>
+      <div className="trendLegend">
+        {metrics.map((metric) => <span key={metric.key}><i style={{ background: metric.color }} />{metric.label}</span>)}
+      </div>
+    </div>
+  );
+}
+
+function DriveAnalysisPanel({ run }: { run: MlDriveAnalysisRun }) {
+  return (
+    <section className="subPanel spotlightPanel">
+      <div className="spotlightHead">
+        <div>
+          <p className="eyebrow">Newest test drive</p>
+          <h3>{brickpilotVersionLabel(run.brickpilot_version)} · {shortRoute(run.route_id)}</h3>
+          <p className="subtle">{fmtDate(run.created_at)} · {run.model_bundle || "model unknown"} · {fmtDuration(run.duration_sec)}</p>
+        </div>
+        <span className="chip">{fmtCount(run.review_predictions)} review windows</span>
+      </div>
+      <div className="statStrip emphasisStrip">
+        {[
+          ["Route samples", fmtCount(run.sample_count)],
+          ["Signals scored", fmtCount(run.all_predictions)],
+          ["Targets trained", fmtCount(run.trained_targets)],
+          ["Avg speed", `${fmtNumber(run.speed_avg_mph)} mph`],
+          ["Top speed", `${fmtNumber(run.speed_max_mph)} mph`],
+          ["Low-speed traffic", fmtPct(run.low_speed_frac)]
+        ].map(([label, value]) => (
+          <span className="statPill" key={label}><strong>{value}</strong>{label}</span>
+        ))}
+      </div>
+      <div className="visualGrid focusGrid">
+        <section className="chartPanel">
+          <div className="chartHead">
+            <h3>Drive Context</h3>
+            <span>route mix</span>
+          </div>
+          <MiniBarChart
+            rows={[
+              { label: "low speed", value: run.low_speed_frac, detail: fmtPct(run.low_speed_frac), family: "drive_control" },
+              { label: "stopped", value: run.stopped_frac, detail: fmtPct(run.stopped_frac), family: "lateral" },
+              { label: "brake pressed", value: run.brake_pressed_frac, detail: fmtPct(run.brake_pressed_frac), family: "longitudinal" },
+              { label: "gas pressed", value: run.gas_pressed_frac, detail: fmtPct(run.gas_pressed_frac), family: "quality" }
+            ]}
+            maxValue={1}
+          />
+        </section>
+        <section className="chartPanel">
+          <div className="chartHead">
+            <h3>Stop Signals</h3>
+            <span>share of samples</span>
+          </div>
+          <MiniBarChart
+            rows={run.shadow_metrics.map((row) => ({
+              label: row.label,
+              value: row.value,
+              detail: `${fmtPct(row.value, 1)} · ${fmtCount(row.count)}`,
+              family: row.field.includes("stop") || row.field.includes("Standstill") ? "longitudinal" : "phev"
+            }))}
+            maxValue={1}
+          />
+        </section>
+        <section className="chartPanel">
+          <div className="chartHead">
+            <h3>Review Targets</h3>
+            <span>highest-confidence windows</span>
+          </div>
+          <MiniBarChart
+            rows={run.top_prediction_labels.slice(0, 8).map((row) => ({
+              label: row.target,
+              value: row.seconds,
+              detail: `${fmtDuration(row.seconds)} · ${fmtScore(row.best_peak_score)}`,
+              family: row.family
+            }))}
+          />
+        </section>
+        <section className="chartPanel wide">
+          <div className="chartHead">
+            <h3>Candidate Timeline</h3>
+            <span>{fmtDuration(run.duration_sec)} drive</span>
+          </div>
+          <SignalTimeline timeline={run.prediction_timeline} durationSec={run.duration_sec} title="Latest drive candidate timeline" />
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function AlphaComparisonPanel({ comparison }: { comparison: MlAlphaComparison }) {
+  const groups = comparison.groups;
+  const metrics: Array<{ label: string; key: keyof MlAlphaComparison["groups"][number]; format: (value: number) => string; family: string }> = [
+    { label: "lead traffic", key: "lead_frac", format: (value) => fmtPct(value), family: "phev" },
+    { label: "low speed", key: "low_speed_frac", format: (value) => fmtPct(value), family: "drive_control" },
+    { label: "brake pressed", key: "brake_pressed_frac", format: (value) => fmtPct(value), family: "longitudinal" },
+    { label: "assist active", key: "assist_active_frac", format: (value) => fmtPct(value, 1), family: "quality" },
+    { label: "stop active", key: "stop_active_frac", format: (value) => fmtPct(value, 1), family: "lateral" },
+    { label: "good stops", key: "good_stop_labels", format: (value) => fmtNumber(value, 1), family: "phev" },
+    { label: "bad brake labels", key: "bad_brake_labels", format: (value) => fmtNumber(value, 1), family: "longitudinal" }
+  ];
+  return (
+    <section className="subPanel">
+      <div className="chartHead">
+        <h3>{comparison.title}</h3>
+        <span>{fmtCount(comparison.routes)} routes · {fmtDate(comparison.created_at)}</span>
+      </div>
+      <div className="comparisonGrid">
+        {metrics.map((metric) => {
+          const max = Math.max(1, ...groups.map((group) => Number(group[metric.key] || 0)));
+          return (
+            <div className="compareMetric" key={metric.label}>
+              <strong>{metric.label}</strong>
+              {groups.map((group) => {
+                const value = Number(group[metric.key] || 0);
+                const pct = Math.max(2, Math.min(100, (value / max) * 100));
+                return (
+                  <div className="compareBar" key={`${metric.label}-${group.comparison_group}`}>
+                    <span>{group.label}</span>
+                    <div className="miniTrack"><i style={{ width: `${pct}%`, background: familyColor(metric.family) }} /></div>
+                    <em>{metric.format(value)}</em>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+      <div className="splitGrid">
+        <div>
+          <h3>Route Readout</h3>
+          <div className="compactList">
+            {comparison.route_metrics.map((route) => (
+              <article key={route.route_id}>
+                <strong>{shortRoute(route.route_id)} · {route.version}</strong>
+                <span>{route.note || labelText(route.comparison_group)} · {fmtPct(route.lead_frac)} lead · {fmtPct(route.brake_pressed_frac)} brake · {fmtCount(route.bad_brake_labels)} bad-brake labels</span>
+              </article>
+            ))}
+          </div>
+        </div>
+        <div>
+          <h3>Stop Reasons</h3>
+          <MiniBarChart
+            rows={comparison.active_stop_reasons.map((row) => ({
+              label: row.value,
+              value: row.samples,
+              detail: `${fmtCount(row.samples)} · ${fmtPct(row.frac, 1)}`,
+              family: row.comparison_group.includes("on") ? "phev" : "other"
+            }))}
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CanAnalysisPanel({ analysis }: { analysis: MlCanAnalysis }) {
+  return (
+    <section className="subPanel">
+      <div className="chartHead">
+        <h3>{analysis.title}</h3>
+        <span>{fmtCount(analysis.routes)} routes · {fmtDate(analysis.created_at)}</span>
+      </div>
+      <div className="statStrip emphasisStrip">
+        {[
+          ["CAN frames", fmtCount(analysis.frame_rows)],
+          ["Decoded fields", fmtCount(analysis.decoded_field_rows)],
+          ["Label effects", fmtCount(analysis.label_effect_rows)],
+          ["Test intervals", fmtCount(analysis.test_interval_rows)]
+        ].map(([label, value]) => (
+          <span className="statPill" key={label}><strong>{value}</strong>{label}</span>
+        ))}
+      </div>
+      <div className="splitGrid">
+        <div>
+          <h3>Strongest Label Matches</h3>
+          <MiniBarChart
+            rows={analysis.top_effects.slice(0, 8).map((row) => ({
+              label: row.target,
+              value: row.abs_effect,
+              detail: `${row.field} · ${fmtNumber(row.abs_effect, 2)}`,
+              family: familyForTarget(row.target)
+            }))}
+          />
+        </div>
+        <div>
+          <h3>Route Candidate Fields</h3>
+          <MiniBarChart
+            rows={analysis.route_candidates.slice(0, 8).map((row) => ({
+              label: row.field,
+              value: row.count,
+              detail: `${fmtCount(row.count)} rows · max ${fmtNumber(row.max, 1)}`,
+              family: "drive_control"
+            }))}
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function MlProgress() {
   const [overview, setOverview] = useState<MlOverview | null>(null);
   const [status, setStatus] = useState("Loading ML overview");
@@ -660,28 +1003,45 @@ function MlProgress() {
 
   const counts = overview?.counts;
   const voiceRun = overview?.latest_voice_labeler_run;
+  const driveRun = overview?.latest_drive_analysis;
+  const alphaComparison = overview?.latest_alpha_comparison;
+  const canAnalysis = overview?.latest_can_analysis;
   return (
     <section className="panel mlPage">
       <div className="sectionHead">
         <div>
-          <h2>ML Progress</h2>
-          <p className="subtle">Read-only view of DB coverage, recovered analysis, and model-tuning evidence.</p>
+          <h2>Research Dashboard</h2>
+          <p className="subtle">Latest drives, labels, signal leads, and review candidates.</p>
         </div>
         <button onClick={refresh}>Refresh</button>
       </div>
       {status ? <output>{status}</output> : null}
       {overview && counts ? (
         <>
-          <div className="metricGrid">
+          <div className="dashboardHero">
+            <div>
+              <p className="eyebrow">Current build evidence</p>
+              <h3>{driveRun ? `${brickpilotVersionLabel(driveRun.brickpilot_version)} on ${shortRoute(driveRun.route_id)}` : "Drive evidence loading"}</h3>
+              <p className="subtle">
+                {driveRun ? `${fmtDate(driveRun.created_at)} · ${driveRun.model_bundle || "model unknown"} · ${fmtDuration(driveRun.duration_sec)}` : "No post-drive analysis export found yet."}
+              </p>
+            </div>
+            <div className="heroStats">
+              <span><strong>{fmtCount(counts.routes)}</strong> routes</span>
+              <span><strong>{fmtCount(counts.labels)}</strong> human labels</span>
+              <span><strong>{fmtCount(counts.bookmarks)}</strong> voice marks</span>
+              <span><strong>{fmtCount(counts.discovered_reports)}</strong> reports</span>
+            </div>
+          </div>
+
+          <div className="metricGrid conciseMetrics">
             {[
-              ["Routes", counts.routes],
-              ["Human labels", counts.labels],
-              ["Voice marks", counts.bookmarks],
               ["Route samples", counts.route_samples],
               ["CAN frames", counts.can_frames],
               ["Events", counts.events],
               ["Artifacts", counts.artifacts],
-              ["Reports", counts.discovered_reports]
+              ["Review jobs", counts.review_jobs],
+              ["Report sources", counts.discovered_sources]
             ].map(([label, value]) => (
               <article className="metricCard" key={label}>
                 <span>{label}</span>
@@ -689,16 +1049,49 @@ function MlProgress() {
               </article>
             ))}
           </div>
+
+          {driveRun ? <DriveAnalysisPanel run={driveRun} /> : null}
+
+          <div className="mlGrid">
+            <section className="subPanel">
+              <div className="chartHead">
+                <h3>Recent Drive Mix</h3>
+                <span>{overview.analysis_trend.length} post-drive runs</span>
+              </div>
+              <TrendLineChart points={overview.analysis_trend} />
+            </section>
+            <section className="subPanel">
+              <h3>Coverage</h3>
+              <div className="progressList">
+                {overview.progress.map((item) => {
+                  const pct = item.total > 0 ? Math.round((item.value / item.total) * 100) : 0;
+                  return (
+                    <div className="progressRow" key={item.label}>
+                      <div>
+                        <strong>{item.label}</strong>
+                        <span>{fmtCount(item.value)} / {fmtCount(item.total)} · {pct}%</span>
+                      </div>
+                      <div className="bar"><span style={{ width: `${Math.min(100, pct)}%` }} /></div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
+
+          {alphaComparison ? <AlphaComparisonPanel comparison={alphaComparison} /> : null}
+          {canAnalysis ? <CanAnalysisPanel analysis={canAnalysis} /> : null}
+
           {voiceRun ? (
             <section className="subPanel voiceRunPanel">
               <div className="voiceRunHeader">
                 <div>
-                  <h3>0.3.25 Voice Labeler Run</h3>
+                  <h3>Voice Labeler Run</h3>
                   <p className="subtle">
-                    {fmtDate(voiceRun.created_at)} · held-out test {voiceRun.test_route} · {voiceRun.validation_routes.length} validation routes
+                    {fmtDate(voiceRun.created_at)} · held-out test {shortRoute(voiceRun.test_route)} · {voiceRun.validation_routes.length} validation routes
                   </p>
                 </div>
-                <span className="chip">{voiceRun.human_validation_route ? `Human reference ${voiceRun.human_validation_route}` : "No human reference route"}</span>
+                <span className="chip">{voiceRun.human_validation_route ? `Human reference ${shortRoute(voiceRun.human_validation_route)}` : "No human reference route"}</span>
               </div>
               <div className="statStrip">
                 {[
@@ -747,12 +1140,16 @@ function MlProgress() {
                     <span>validation narration intensity</span>
                   </div>
                   <MiniBarChart
-                    rows={voiceRun.route_label_counts.map((row) => ({
-                      label: row.route_id.replace(/^00000/, ""),
-                      value: row.labels_per_min,
-                      detail: `${row.role.replaceAll("_", " ")} · ${row.atomic_label_count} atoms · ${row.voice_bookmark_count} marks`,
-                      family: row.role === "human_validation" ? "quality" : row.role === "test" ? "other" : "phev"
-                    }))}
+                    rows={voiceRun.route_label_counts
+                      .slice()
+                      .sort((a, b) => b.labels_per_min - a.labels_per_min)
+                      .slice(0, 8)
+                      .map((row) => ({
+                        label: shortRoute(row.route_id),
+                        value: row.labels_per_min,
+                        detail: `${row.role.replaceAll("_", " ")} · ${row.atomic_label_count} atoms · ${row.voice_bookmark_count} marks`,
+                        family: row.role === "human_validation" ? "quality" : row.role === "test" ? "other" : "phev"
+                      }))}
                     valueLabel={(value) => `${value.toFixed(1)} atoms/min`}
                   />
                 </section>
@@ -817,7 +1214,7 @@ function MlProgress() {
                 </div>
                 <div>
                   <h3>PHEV CAN Signal Leads</h3>
-                  <p className="subtle tableNote">Candidate correlations only; DBC semantics are not decoded yet.</p>
+                  <p className="subtle tableNote">Candidate matches from vehicle messages; names are still provisional.</p>
                   <table className="compactTable canLeadTable">
                     <thead><tr><th>Target</th><th>CAN</th><th>Byte</th><th>Effect</th><th>Status</th></tr></thead>
                     <tbody>
@@ -827,34 +1224,21 @@ function MlProgress() {
                           <td>bus {row.bus} · {row.address_hex}</td>
                           <td>{row.byte_index} {row.stat}</td>
                           <td>{row.effect.toFixed(3)}</td>
-                          <td>{labelText(row.interpretation_status || "candidate_correlation_not_dbc_semantics")}</td>
+                          <td>{signalStatusText(row.interpretation_status)}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
               </div>
-              <code className="runPath">{voiceRun.report_path || voiceRun.relative_path}</code>
+              <details className="artifactDetails">
+                <summary>Export location</summary>
+                <code>{voiceRun.report_path || voiceRun.relative_path}</code>
+              </details>
             </section>
           ) : null}
+
           <div className="mlGrid">
-            <section className="subPanel">
-              <h3>Coverage</h3>
-              <div className="progressList">
-                {overview.progress.map((item) => {
-                  const pct = item.total > 0 ? Math.round((item.value / item.total) * 100) : 0;
-                  return (
-                    <div className="progressRow" key={item.label}>
-                      <div>
-                        <strong>{item.label}</strong>
-                        <span>{fmtCount(item.value)} / {fmtCount(item.total)} · {pct}%</span>
-                      </div>
-                      <div className="bar"><span style={{ width: `${Math.min(100, pct)}%` }} /></div>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
             <section className="subPanel">
               <h3>Review Queue</h3>
               <div className="statusChips">
@@ -872,37 +1256,44 @@ function MlProgress() {
                 ))}
               </div>
             </section>
+            <section className="subPanel">
+              <h3>Model Coverage</h3>
+              <div className="tableScroller compactScroller">
+                <table className="compactTable">
+                  <thead><tr><th>Model</th><th>Routes</th><th>Labels</th><th>Bookmarks</th><th>Samples</th><th>Events</th></tr></thead>
+                  <tbody>
+                    {overview.model_coverage.map((row) => (
+                      <tr key={row.model_bundle}>
+                        <td>{row.model_bundle}</td>
+                        <td>{fmtCount(row.routes)}</td>
+                        <td>{fmtCount(row.labels)}</td>
+                        <td>{fmtCount(row.bookmarks)}</td>
+                        <td>{fmtCount(row.samples)}</td>
+                        <td>{fmtCount(row.events)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </div>
+
           <section className="subPanel">
-            <h3>Model Coverage</h3>
-            <div className="tableScroller">
-              <table className="compactTable">
-                <thead><tr><th>Model</th><th>Routes</th><th>Labels</th><th>Bookmarks</th><th>Samples</th><th>Events</th></tr></thead>
-                <tbody>
-                  {overview.model_coverage.map((row) => (
-                    <tr key={row.model_bundle}>
-                      <td>{row.model_bundle}</td>
-                      <td>{fmtCount(row.routes)}</td>
-                      <td>{fmtCount(row.labels)}</td>
-                      <td>{fmtCount(row.bookmarks)}</td>
-                      <td>{fmtCount(row.samples)}</td>
-                      <td>{fmtCount(row.events)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="chartHead">
+              <h3>Analysis Library</h3>
+              <span>expand for excerpts and paths</span>
             </div>
-          </section>
-          <section className="subPanel">
-            <h3>Recent ML / CAN / Replay Outputs</h3>
             <div className="reportList">
               {overview.recent_reports.map((report) => (
                 <article className="reportItem" key={report.relative_path}>
                   <div>
                     <strong>{report.title}</strong>
                     <span>{report.kind} · {fmtDate(report.mtime)} · {fmtBytes(report.size_bytes)} · {report.route_ids.length ? `${report.route_ids.length} route(s)` : "unlinked"}</span>
-                    {report.summary ? <p>{report.summary}</p> : null}
-                    <code>{report.relative_path}</code>
+                    <details className="reportDetails">
+                      <summary>Open details</summary>
+                      {report.summary ? <p>{report.summary}</p> : <p>No excerpt found.</p>}
+                      <code>{report.relative_path}</code>
+                    </details>
                   </div>
                 </article>
               ))}

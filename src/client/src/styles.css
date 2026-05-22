@@ -623,6 +623,59 @@ output, .muted {
   gap: 10px;
 }
 
+.dashboardHero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, .85fr);
+  gap: 18px;
+  align-items: center;
+  padding: 18px;
+  border: 1px solid #2c3c50;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #111a24 0%, #111820 52%, #142018 100%);
+}
+
+.dashboardHero h3 {
+  margin: 2px 0 0;
+  font-size: clamp(22px, 2vw, 32px);
+  letter-spacing: 0;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #76d6e4;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.heroStats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.heroStats span {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, .20);
+  border-radius: 8px;
+  background: rgba(8, 17, 28, .56);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.heroStats strong {
+  display: block;
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.conciseMetrics {
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+}
+
 .metricCard, .subPanel {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -642,6 +695,24 @@ output, .muted {
 .metricCard strong {
   display: block;
   margin-top: 4px;
+  font-size: 24px;
+}
+
+.spotlightPanel {
+  display: grid;
+  gap: 14px;
+  border-color: #31445b;
+}
+
+.spotlightHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.spotlightHead h3 {
+  margin: 2px 0 0;
   font-size: 24px;
 }
 
@@ -691,10 +762,18 @@ output, .muted {
   font-size: 17px;
 }
 
+.emphasisStrip .statPill strong {
+  font-size: 20px;
+}
+
 .visualGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+.focusGrid {
+  grid-template-columns: minmax(0, .95fr) minmax(0, .95fr) minmax(0, 1.1fr);
 }
 
 .chartPanel {
@@ -767,6 +846,107 @@ output, .muted {
   display: block;
   height: 100%;
   border-radius: inherit;
+}
+
+.miniTrack i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.trendChartWrap {
+  min-width: 0;
+  overflow: auto;
+}
+
+.trendChart {
+  display: block;
+  min-width: 560px;
+  width: 100%;
+  height: auto;
+}
+
+.trendChart line {
+  stroke: rgba(148, 163, 184, .16);
+  stroke-width: 1;
+}
+
+.trendChart text {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.trendChart .xLabel {
+  fill: #c9d1d9;
+  font-weight: 700;
+}
+
+.trendLegend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.trendLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.trendLegend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.comparisonGrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(120px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.compareMetric {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.compareMetric > strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compareBar {
+  display: grid;
+  grid-template-columns: minmax(0, 76px) minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.compareBar span,
+.compareBar em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.compareBar span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.splitGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
 }
 
 .familyStack {
@@ -1000,6 +1180,38 @@ output, .muted {
   white-space: nowrap;
 }
 
+.artifactDetails,
+.reportDetails {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.artifactDetails summary,
+.reportDetails summary {
+  cursor: pointer;
+  color: #8cc2ff;
+  font-weight: 700;
+}
+
+.artifactDetails code,
+.reportDetails code {
+  display: block;
+  margin-top: 8px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reportDetails p {
+  margin: 8px 0;
+}
+
+.compactScroller {
+  max-height: 420px;
+}
+
 .candidateItem {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
@@ -1060,8 +1272,21 @@ output, .muted {
   .ridesTable {
     min-width: 1080px;
   }
-  .metricGrid, .mlGrid, .ingestGrid, .voiceRunGrid, .statStrip, .visualGrid {
+  .dashboardHero,
+  .metricGrid,
+  .conciseMetrics,
+  .mlGrid,
+  .ingestGrid,
+  .voiceRunGrid,
+  .statStrip,
+  .visualGrid,
+  .focusGrid,
+  .comparisonGrid,
+  .splitGrid {
     grid-template-columns: 1fr;
+  }
+  .heroStats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .chartPanel.wide {
     grid-column: auto;
@@ -1074,5 +1299,11 @@ output, .muted {
   }
   .voiceRunHeader {
     flex-direction: column;
+  }
+  .spotlightHead {
+    flex-direction: column;
+  }
+  .compareBar {
+    grid-template-columns: minmax(0, 94px) minmax(0, 1fr) auto;
   }
 }
