@@ -1,6 +1,6 @@
 {
   "name": "brickpilot-research",
-  "version": "0.3.30.0",
+  "version": "0.5.6",
   "description": "Local tools, ML workflows, and web UI for Brickpilot development and drive review.",
   "type": "module",
   "scripts": {
