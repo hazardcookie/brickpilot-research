@@ -7,6 +7,8 @@ from scripts.drive_tests.train_voice_labeler_0325 import (
   REVIEWED_TRAINING_ROUTES_053,
   REVIEWED_TRAINING_ROUTES_054,
   REVIEWED_TRAINING_ROUTES_055,
+  REVIEWED_TRAINING_ROUTES_056,
+  REVIEWED_TRAINING_ROUTES_057,
   REVIEWED_TRAINING_ROUTES,
   TEST_ROUTE,
   TRAINING_ROUTES,
@@ -107,6 +109,7 @@ def test_055_rolling_traffic_stop_phrases_map_to_actionable_labels() -> None:
   assert {
     "braking_early",
     "unnecessary_braking",
+    "overbraked_rolling_traffic",
     "quality_bad",
   } <= rolling
 
@@ -114,6 +117,7 @@ def test_055_rolling_traffic_stop_phrases_map_to_actionable_labels() -> None:
   assert {
     "braking_early",
     "unnecessary_braking",
+    "overbraked_rolling_traffic",
     "quality_bad",
   } <= overbrake
 
@@ -130,6 +134,50 @@ def test_055_rolling_traffic_stop_phrases_map_to_actionable_labels() -> None:
     "braking_absent",
     "braking_bad",
   } <= absent
+
+
+def test_056_native_pacing_and_follow_distance_phrases_are_first_class() -> None:
+  good = normalize_labels("Good pacing. Good rolling stop. Good follow distance.")
+  assert {
+    "pacing_good",
+    "rolling_follow_good",
+    "follow_distance_good",
+    "brake_good",
+    "quality_good",
+  } <= good
+  assert label_family("pacing_good") == "longitudinal"
+  assert label_polarity("pacing_good") == "positive"
+
+  bad = normalize_labels("Follow distance too far. Overcommitting braking too early. Bad acceleration.")
+  assert {
+    "follow_distance_too_far",
+    "follow_distance_bad",
+    "braking_early",
+    "unnecessary_braking",
+    "overbraked_rolling_traffic",
+    "accel_too_lazy",
+    "quality_bad",
+  } <= bad
+  assert label_family("follow_distance_too_far") == "longitudinal"
+  assert label_polarity("follow_distance_too_far") == "negative"
+  assert label_polarity("overbraked_rolling_traffic") == "negative"
+
+  profile = normalize_labels("Standard follow distance. Aggressive follow distance. Distance four. I don't like this distance.")
+  assert {
+    "follow_profile_standard",
+    "follow_profile_aggressive",
+    "follow_distance_setting_4",
+    "follow_distance_bad",
+    "follow_distance_too_far",
+    "quality_bad",
+  } <= profile
+  assert label_family("follow_distance_setting_4") == "longitudinal"
+
+  assert {"brake_light", "driver_brake_intervention", "braking_bad"} <= normalize_labels("Brake present. Driver braking needed.")
+  assert {"brake_good", "quality_good"} <= normalize_labels("Good for stop.")
+  assert {"phev_regen_coast", "regen_light_coast"} <= normalize_labels("Coasting.")
+  assert {"gear_neutral", "gear_drive"} <= normalize_labels("Off neutral drive.")
+  assert {"steering_good", "quality_good"} <= normalize_labels("Good lane centering.")
 
 
 def test_normalize_0330_stationary_and_intervention_labels() -> None:
@@ -202,6 +250,10 @@ def test_normalize_054_stop_stack_field_phrases() -> None:
     "braking_late",
     "driver_brake_intervention",
   } <= normalize_labels("Late present late braking driver brake needed.")
+  assert {"missed_stop", "quality_bad"} <= normalize_labels("Bad miss stop.")
+  mixed = normalize_labels("Bad pacing. Good braking. Good resume. Bad pacing.")
+  assert {"pacing_bad", "brake_good", "accel_good", "quality_bad"} <= mixed
+  assert "braking_bad" not in mixed
 
 
 def test_route_scope_is_the_040_beta_validation_and_test_set() -> None:
@@ -216,8 +268,10 @@ def test_route_scope_is_the_040_beta_validation_and_test_set() -> None:
   assert len(REVIEWED_TRAINING_ROUTES_053) == 1
   assert len(REVIEWED_TRAINING_ROUTES_054) == 3
   assert len(REVIEWED_TRAINING_ROUTES_055) == 1
-  assert len(REVIEWED_TRAINING_ROUTES) == 15
-  assert len(TRAINING_ROUTES) == 26
+  assert len(REVIEWED_TRAINING_ROUTES_056) == 2
+  assert len(REVIEWED_TRAINING_ROUTES_057) == 1
+  assert len(REVIEWED_TRAINING_ROUTES) == 18
+  assert len(TRAINING_ROUTES) == 29
   assert TEST_ROUTE == "00000195--d936b2944f"
   assert TEST_ROUTE not in VALIDATION_ROUTES
   assert TEST_ROUTE not in TRAINING_ROUTES
@@ -228,6 +282,7 @@ def test_route_scope_is_the_040_beta_validation_and_test_set() -> None:
   assert set(REVIEWED_TRAINING_ROUTES_053) < set(TRAINING_ROUTES)
   assert set(REVIEWED_TRAINING_ROUTES_054) < set(TRAINING_ROUTES)
   assert set(REVIEWED_TRAINING_ROUTES_055) < set(TRAINING_ROUTES)
+  assert set(REVIEWED_TRAINING_ROUTES_057) < set(TRAINING_ROUTES)
   assert "000001d3--8074b1f3f1" in REVIEWED_TRAINING_ROUTES_04X
   assert "000001d9--9609d9a67f" in REVIEWED_TRAINING_ROUTES_04X
   assert "000001e5--3c82eba9a4" in REVIEWED_TRAINING_ROUTES_050
@@ -237,6 +292,9 @@ def test_route_scope_is_the_040_beta_validation_and_test_set() -> None:
   assert "000001fb--097115907b" in REVIEWED_TRAINING_ROUTES_054
   assert "000001fe--3bc01df03a" in REVIEWED_TRAINING_ROUTES_054
   assert "00000203--5d7d932abf" in REVIEWED_TRAINING_ROUTES_055
+  assert "00000207--a8c307d230" in REVIEWED_TRAINING_ROUTES_056
+  assert "00000209--f9ffcb0581" in REVIEWED_TRAINING_ROUTES_056
+  assert "00000213--ab5b813126" in REVIEWED_TRAINING_ROUTES_057
   assert HUMAN_VALIDATION_ROUTE == "00000199--d5f5711730"
   assert HUMAN_VALIDATION_ROUTE in VALIDATION_ROUTES
   assert "000001a2--3ede8392f4" in HUMAN_VALIDATION_ROUTES

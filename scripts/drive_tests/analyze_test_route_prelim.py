@@ -34,6 +34,7 @@ from scripts.drive_tests.brickpilot_db.store import DriveStore
 
 DEFAULT_OUTPUT_ROOT = Path(os.environ.get("BRICKPILOT_ANALYSIS_ROOT", Path.home() / "BrickpilotDriveDB" / "analysis_exports"))
 KEY_SHADOW_FIELDS = (
+  "vEgo",
   "nearStandstill",
   "standstill",
   "cruiseStandstill",
@@ -94,6 +95,12 @@ KEY_SHADOW_FIELDS = (
   "rollingLeadConfidence",
   "finalStopAllowed",
   "finalStopBlockedReason",
+  "leadPacingMode",
+  "leadPacingTargetGap",
+  "leadPacingGapError",
+  "leadPacingVRel",
+  "leadPacingAssistDelta",
+  "leadPacingJerkLimited",
   "steeringGuardSuppressed",
   "steeringGuardUpstreamWouldSuppress",
   "steeringGuardAboveLimitFrames",

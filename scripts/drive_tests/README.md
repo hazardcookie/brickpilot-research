@@ -56,6 +56,46 @@ The sweep writes ranked candidate CSVs, a Markdown report, and an SVG chart unde
 It is a qlog/shadow-sample policy proxy, not a full process replay, and is meant
 to rank installable candidates before promoting them into a comma build.
 
+Normalize imported voice bookmarks into reviewed DriveDB labels:
+
+```bash
+PYTHONPATH=/path/to/brickpilot-research python3 \
+  scripts/drive_tests/normalize_review_voice_labels.py <route-id> \
+  --config ~/.config/brickpilot/drive_db.toml \
+  --output-dir ~/BrickpilotDriveDB/analysis_exports/voice_review_normalization_<stamp> \
+  --finish
+```
+
+Use repeated `--alpha-long on/off` values when route metadata is stale and the
+driver explicitly identifies the settings. The normalizer applies the voice
+alignment calibrator, splits mixed phrases into atomic labels, tags label phase
+and family, and can finish the manual review job after writing labels.
+
+Generate stop-stack/event-card reports from a preliminary route export:
+
+```bash
+PYTHONPATH=/path/to/brickpilot-research python3 \
+  scripts/drive_tests/analyze_stop_stack_events.py \
+  ~/BrickpilotDriveDB/analysis_exports/prelim_<stamp>_<route-id> \
+  --route-id <route-id>
+```
+
+The event-card report includes active stop source/reason/mode crosstabs,
+required-decel validity, final-stop blocked reasons, and current lead-pacing
+telemetry when present in `brickpilotShadow`.
+
+Compare one Alpha Long ON route against one Alpha Long OFF/native reference:
+
+```bash
+python3 scripts/drive_tests/compare_alpha_long_native_pacing.py \
+  --alpha-on ~/BrickpilotDriveDB/analysis_exports/prelim_alpha_on_<route-id> \
+  --alpha-off ~/BrickpilotDriveDB/analysis_exports/prelim_alpha_off_<route-id> \
+  --output-dir ~/BrickpilotDriveDB/analysis_exports/alpha_long_native_compare_<stamp>
+```
+
+This writes a small Markdown decision report plus CSVs for telemetry and labels.
+It is intended for native/SCC mimic work such as 0.5.7.
+
 Sweep Brickpilot lateral steering smoothness candidates over DriveDB qlogs:
 
 ```bash

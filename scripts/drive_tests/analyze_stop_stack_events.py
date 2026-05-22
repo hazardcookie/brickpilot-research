@@ -34,6 +34,14 @@ STOP_MODE_NAMES = {
   4: "creep_hold",
 }
 
+LEAD_PACING_MODE_NAMES = {
+  0: "none",
+  1: "shadow",
+  2: "accel",
+  3: "decel",
+  4: "coast",
+}
+
 FINAL_STOP_BLOCKED_REASON_NAMES = {
   0: "none",
   1: "no_final_source",
@@ -118,6 +126,12 @@ EVENT_CARD_FIELDS = (
   "rollingLeadConfidence",
   "finalStopAllowed",
   "finalStopBlockedReason",
+  "leadPacingMode",
+  "leadPacingTargetGap",
+  "leadPacingGapError",
+  "leadPacingVRel",
+  "leadPacingAssistDelta",
+  "leadPacingJerkLimited",
 )
 
 CAN_CARD_FIELDS = (
@@ -224,8 +238,8 @@ def classify_context(row: dict[str, Any]) -> str:
 
 
 def crosstab(rows: list[dict[str, Any]], field: str, names: dict[int, str] | None = None,
-             active_only: bool = False) -> list[dict[str, Any]]:
-  selected = [r for r in rows if not active_only or as_bool(r.get("stopActive"))]
+             active_only: bool = False, active_field: str = "stopActive") -> list[dict[str, Any]]:
+  selected = [r for r in rows if not active_only or as_bool(r.get(active_field))]
   counts: Counter[str] = Counter()
   for row in selected:
     raw = as_int(row.get(field))
@@ -345,9 +359,11 @@ def build_event_cards(shadow_rows: list[dict[str, Any]], carstate_rows: list[dic
       "bucket_mode": mode_name(shadow_bucket, "stopDebtBucket", BUCKET_NAMES),
       "brake_state_mode": mode_name(shadow_bucket, "stopBrakeState", BRAKE_STATE_NAMES),
       "stop_mode": mode_name(shadow_bucket, "stopMode", STOP_MODE_NAMES),
+      "lead_pacing_mode": mode_name(shadow_bucket, "leadPacingMode", LEAD_PACING_MODE_NAMES),
       "final_stop_blocked_reason_mode": mode_name(shadow_bucket, "finalStopBlockedReason", FINAL_STOP_BLOCKED_REASON_NAMES),
     }
     active_bucket = [row for row in shadow_bucket if as_bool(row.get("stopActive"))]
+    longitudinal_active_bucket = [row for row in shadow_bucket if as_bool(row.get("longitudinalAssistActive"))]
     if active_bucket:
       card["dominant_active_reason"] = mode_name(active_bucket, "stopAssistReason", REASON_NAMES)
       card["dominant_active_stop_mode"] = mode_name(active_bucket, "stopMode", STOP_MODE_NAMES)
@@ -356,6 +372,10 @@ def build_event_cards(shadow_rows: list[dict[str, Any]], carstate_rows: list[dic
       card["dominant_active_reason"] = "none"
       card["dominant_active_stop_mode"] = "none"
       card["dominant_active_source"] = "none"
+    if longitudinal_active_bucket:
+      card["dominant_active_lead_pacing_mode"] = mode_name(longitudinal_active_bucket, "leadPacingMode", LEAD_PACING_MODE_NAMES)
+    else:
+      card["dominant_active_lead_pacing_mode"] = "none"
     for field in EVENT_CARD_FIELDS:
       card.update(numeric_summary(shadow_bucket, field, ""))
     for field in CAN_CARD_FIELDS:
@@ -400,7 +420,8 @@ def label_coverage(prelim_dir: Path, route_id: str, predictions: list[dict[str, 
 def write_report(out_dir: Path, route_id: str, cards: list[dict[str, Any]], source_rows: list[dict[str, Any]],
                  reason_rows: list[dict[str, Any]], validity_rows: list[dict[str, Any]],
                  coverage_rows: list[dict[str, Any]], stop_mode_rows: list[dict[str, Any]],
-                 blocked_reason_rows: list[dict[str, Any]]) -> None:
+                 blocked_reason_rows: list[dict[str, Any]],
+                 lead_pacing_mode_rows: list[dict[str, Any]]) -> None:
   coverage = coverage_rows[0] if coverage_rows else {}
   lines = [
     f"# Stop Stack Event Cards: {route_id}",
@@ -420,6 +441,9 @@ def write_report(out_dir: Path, route_id: str, cards: list[dict[str, Any]], sour
   lines.extend(["", "## Active Stop Mode Mix"])
   for row in stop_mode_rows:
     lines.append(f"- {row['value']}: {row['samples']} samples ({float(row['frac']):.3f})")
+  lines.extend(["", "## Active Lead-Pacing Mode Mix"])
+  for row in lead_pacing_mode_rows:
+    lines.append(f"- {row['value']}: {row['samples']} samples ({float(row['frac']):.3f})")
   lines.extend(["", "## Final-Stop Blocked Reason Mix"])
   for row in blocked_reason_rows:
     lines.append(f"- {row['value']}: {row['samples']} samples ({float(row['frac']):.3f})")
@@ -433,6 +457,7 @@ def write_report(out_dir: Path, route_id: str, cards: list[dict[str, Any]], sour
       f"`{card['trigger']}` class={card.get('classification', '')} "
       f"source={card.get('source_mode', '')} reason={card.get('dominant_active_reason', card.get('reason_mode', ''))} "
       f"mode={card.get('dominant_active_stop_mode', card.get('stop_mode', ''))} "
+      f"lead_pacing={card.get('dominant_active_lead_pacing_mode', card.get('lead_pacing_mode', ''))} "
       f"final_block={card.get('final_stop_blocked_reason_mode', '')} "
       f"labels={card.get('nearby_labels', '')}"
     )
@@ -450,6 +475,8 @@ def run(prelim_dir: Path, out_dir: Path, route_id: str, window_sec: float, max_c
   source_rows = crosstab(shadow_rows, "stopSource", SOURCE_NAMES, active_only=True)
   reason_rows = crosstab(shadow_rows, "stopAssistReason", REASON_NAMES, active_only=True)
   stop_mode_rows = crosstab(shadow_rows, "stopMode", STOP_MODE_NAMES, active_only=True)
+  lead_pacing_mode_rows = crosstab(shadow_rows, "leadPacingMode", LEAD_PACING_MODE_NAMES,
+                                   active_only=True, active_field="longitudinalAssistActive")
   blocked_reason_rows = crosstab(shadow_rows, "finalStopBlockedReason", FINAL_STOP_BLOCKED_REASON_NAMES, active_only=False)
   bucket_rows = crosstab(shadow_rows, "stopDebtBucket", BUCKET_NAMES, active_only=True)
   validity_rows = crosstab(shadow_rows, "stopRequiredDecelValid", {0: "invalid", 1: "valid"}, active_only=True)
@@ -461,6 +488,7 @@ def run(prelim_dir: Path, out_dir: Path, route_id: str, window_sec: float, max_c
   write_csv(out_dir / "active_stop_assist_by_source.csv", source_rows)
   write_csv(out_dir / "active_stop_assist_by_reason.csv", reason_rows)
   write_csv(out_dir / "active_stop_assist_by_stop_mode.csv", stop_mode_rows)
+  write_csv(out_dir / "active_lead_pacing_by_mode.csv", lead_pacing_mode_rows)
   write_csv(out_dir / "final_stop_blocked_reason_mix.csv", blocked_reason_rows)
   write_csv(out_dir / "active_stop_assist_by_bucket.csv", bucket_rows)
   write_csv(out_dir / "active_stop_assist_by_required_decel_valid.csv", validity_rows)
@@ -468,7 +496,7 @@ def run(prelim_dir: Path, out_dir: Path, route_id: str, window_sec: float, max_c
   write_csv(out_dir / "stop_context_bucket_summary.csv", context_rows)
   write_csv(out_dir / "label_coverage_summary.csv", coverage_rows)
   write_report(out_dir, route_id, cards, source_rows, reason_rows, validity_rows, coverage_rows,
-               stop_mode_rows, blocked_reason_rows)
+               stop_mode_rows, blocked_reason_rows, lead_pacing_mode_rows)
 
 
 def main() -> None:

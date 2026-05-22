@@ -15,6 +15,8 @@ belong outside the repo.
   Drive DB, logdrive ingest, replay, and ML helper scripts.
 - `tools/`: repo-level verification and data reconciliation helpers.
 - `tests/`: UI/server unit tests.
+- `docs/BRICKPILOT_RND_PROCESS.md`: current post-drive label,
+  analysis, ML, and build-planning workflow.
 
 ## Local Setup
 

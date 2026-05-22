@@ -69,6 +69,13 @@ REVIEWED_TRAINING_ROUTES_054 = (
 REVIEWED_TRAINING_ROUTES_055 = (
   "00000203--5d7d932abf",
 )
+REVIEWED_TRAINING_ROUTES_056 = (
+  "00000207--a8c307d230",
+  "00000209--f9ffcb0581",
+)
+REVIEWED_TRAINING_ROUTES_057 = (
+  "00000213--ab5b813126",
+)
 REVIEWED_TRAINING_ROUTES = (
   *REVIEWED_TRAINING_ROUTES_04X,
   *REVIEWED_TRAINING_ROUTES_050,
@@ -76,6 +83,8 @@ REVIEWED_TRAINING_ROUTES = (
   *REVIEWED_TRAINING_ROUTES_053,
   *REVIEWED_TRAINING_ROUTES_054,
   *REVIEWED_TRAINING_ROUTES_055,
+  *REVIEWED_TRAINING_ROUTES_056,
+  *REVIEWED_TRAINING_ROUTES_057,
 )
 TRAINING_ROUTES = (*VALIDATION_ROUTES, *REVIEWED_TRAINING_ROUTES)
 TEST_ROUTE = "00000195--d936b2944f"
@@ -133,6 +142,10 @@ NEGATIVE_LABELS = {
   "human_intervention_brake",
   "human_intervention_steering",
   "follow_distance_bad",
+  "follow_distance_too_far",
+  "pacing_bad",
+  "pacing_bursty",
+  "overbraked_rolling_traffic",
   "steering_jerk",
   "steering_ping_pong",
   "steering_too_damped",
@@ -187,6 +200,7 @@ GROUPS = {
     "lead_present_context",
     "lead_brake_good",
     "lead_brake_bad",
+    "rolling_follow_good",
     "stop_complete",
     "stop_go",
     "stop_go_bad",
@@ -217,6 +231,18 @@ GROUPS = {
     "human_intervention_gas",
     "human_intervention_brake",
     "follow_distance_bad",
+    "follow_distance_too_far",
+    "pacing_bad",
+    "pacing_bursty",
+    "overbraked_rolling_traffic",
+  },
+  "group_follow_profile": {
+    "follow_profile_aggressive",
+    "follow_profile_standard",
+    "follow_distance_setting_1",
+    "follow_distance_setting_2",
+    "follow_distance_setting_3",
+    "follow_distance_setting_4",
   },
   "group_lateral_bad": {
     "steering_jerk",
@@ -259,6 +285,8 @@ GROUPS = {
     "steering_good",
     "lane_change_good",
     "follow_distance_good",
+    "rolling_follow_good",
+    "pacing_good",
     "human_driving",
   },
 }
@@ -282,6 +310,7 @@ REVIEW_PRIORITY_LABELS = {
   "driver_brake_intervention",
   "lead_brake_bad",
   "lead_brake_good",
+  "rolling_follow_good",
   "lead_present_context",
   "resume_bad",
   "resume_lazy",
@@ -290,6 +319,11 @@ REVIEW_PRIORITY_LABELS = {
   "stop_hold_fail",
   "braking_absent",
   "unnecessary_braking",
+  "overbraked_rolling_traffic",
+  "follow_distance_too_far",
+  "pacing_good",
+  "pacing_bad",
+  "pacing_bursty",
   "phev_regen_none",
   "phev_regen_light",
   "phev_regen_medium",
@@ -319,6 +353,12 @@ REVIEW_PRIORITY_LABELS = {
   "auto_hold_release",
   "turn_signal_left",
   "turn_signal_right",
+  "follow_profile_aggressive",
+  "follow_profile_standard",
+  "follow_distance_setting_1",
+  "follow_distance_setting_2",
+  "follow_distance_setting_3",
+  "follow_distance_setting_4",
 }
 
 CV_PRIORITY_TARGETS = (
@@ -336,6 +376,9 @@ CV_PRIORITY_TARGETS = (
   "brake_hard",
   "missed_stop",
   "follow_distance_bad",
+  "follow_distance_too_far",
+  "pacing_bad",
+  "overbraked_rolling_traffic",
   "group_longitudinal_bad",
   "phev_regen_hard",
   "phev_regen_coast",
@@ -485,6 +528,9 @@ def normalize_labels(text: str) -> set[str]:
     add_label(labels, "gear_park")
   if re.search(r"\bneutral (engaged|gear|selected)|\bgear.*neutral\b|\bshift.*neutral\b", s):
     add_label(labels, "gear_neutral")
+  if re.search(r"\boff neutral drive\b|\bneutral drive\b", s):
+    add_label(labels, "gear_neutral")
+    add_label(labels, "gear_drive")
   if re.search(r"\bready,? park,? no pedals\b", s):
     add_label(labels, "ready_park_no_pedals")
     add_label(labels, "gear_park")
@@ -506,7 +552,7 @@ def normalize_labels(text: str) -> set[str]:
       add_label(labels, "auto_hold_release")
     if "off" in s:
       add_label(labels, "auto_hold_off")
-    if "on" in s and "off" not in s:
+    if re.search(r"\bauto hold\b[^.]*\bon\b", s):
       add_label(labels, "auto_hold_on")
   if "cruise button" in s:
     add_label(labels, "cruise_button_press")
@@ -576,11 +622,16 @@ def normalize_labels(text: str) -> set[str]:
       add_label(labels, "phev_regen_coast")
     if re.search(r"\bregen\s+brak", s) and not any(x in s for x in ("hard regen", "heavy regen", "medium regen", "light regen", "mild regen", "small regen")):
       add_label(labels, "phev_regen_light")
+  if re.search(r"\bcoast(?:ing)?\b", s):
+    add_label(labels, "phev_regen_coast")
+    add_label(labels, "regen_light_coast")
 
   if re.search(r"\bfoot on brake\b|\bbrake pressed\b|\bpressing brake\b|\bhuman intervention brake\b|\bhuman brake intervention\b", s):
     add_label(labels, "driver_brake")
   if re.search(r"\bdriver\s+brake\b", s):
     add_label(labels, "driver_brake")
+  if re.search(r"\bbrake\s+present\b", s):
+    add_label(labels, "brake_light")
   if re.search(r"\bno foot on brake\b|\bfoot off brake\b", s):
     add_label(labels, "driver_no_brake")
   if re.search(r"\brelease\s+brake\b", s):
@@ -603,16 +654,31 @@ def normalize_labels(text: str) -> set[str]:
   if re.search(r"\bgood\s+(full\s+)?stop\b|\bsmooth\s+(full\s+)?stop\b", s):
     add_label(labels, "brake_good")
     add_label(labels, "stop_complete")
+  if re.search(r"\bgood\s+for\s+stop\b", s):
+    add_label(labels, "brake_good")
   if "stop and go" in s or "stop-and-go" in s:
     add_label(labels, "stop_go")
     if re.search(r"\bbad\b|\btoo aggressive\b|\bdriver\s+brake\s+needed\b|\blazy\b", s):
       add_label(labels, "stop_go_bad")
     if "lazy" in s:
       add_label(labels, "resume_lazy")
+    if re.search(r"\blate\s+.*resume|\bresume\s+late\b", s):
+      add_label(labels, "resume_bad")
+      add_label(labels, "resume_lazy")
   if "stop creep" in s or "creep issue" in s:
     add_label(labels, "stop_creep_issue")
   if "stop and creep good" in s:
     add_label(labels, "stop_creep_good")
+  if re.search(r"\bgood\s+rolling\s+(stop|brake|follow)\b|\bsmooth\s+rolling\s+(stop|brake|follow)\b|\bgood\s+rolling\s+traffic\b", s):
+    add_label(labels, "rolling_follow_good")
+    add_label(labels, "brake_good")
+  if re.search(r"\bgood\s+pacing\b|\bsmooth\s+pacing\b|\bpacing\s+good\b", s):
+    add_label(labels, "pacing_good")
+  if re.search(r"\bbad\s+pacing\b|\bpacing\s+bad\b|\bweird\s+pacing\b|\bstrange\s+pacing\b|\bbursty\b|\bsudden\s+burst", s):
+    add_label(labels, "pacing_bad")
+    add_label(labels, "quality_bad")
+    if re.search(r"\bbursty\b|\bsudden\s+burst", s):
+      add_label(labels, "pacing_bursty")
   if re.search(r"\b(good|smooth)\b.*\bbrak|\bbrak.*\b(good|smooth)\b", s):
     add_label(labels, "brake_good")
 
@@ -627,7 +693,7 @@ def normalize_labels(text: str) -> set[str]:
     if re.search(r"\blate\s+brak", s):
       add_label(labels, "braking_late")
 
-  if re.search(r"\bdriver\s+brake\s+(needed|need)\b|\bbrake\s+driver\s+brake\s+(needed|need)\b", s):
+  if re.search(r"\bdriver\s+brak(?:e|ing)\s+(needed|need)\b|\bbrake\s+driver\s+brak(?:e|ing)\s+(needed|need)\b", s):
     add_label(labels, "driver_brake")
     add_label(labels, "driver_brake_intervention")
     add_label(labels, "human_intervention_brake")
@@ -645,7 +711,7 @@ def normalize_labels(text: str) -> set[str]:
     add_label(labels, "follow_distance_good")
     add_label(labels, "brake_good")
 
-  if re.search(r"\btoo lazy\b|\blazy\b|\bslow.*set speed\b|\bslow.*target\b", s):
+  if re.search(r"\btoo lazy\b|\blazy\b|\bslow.*set speed\b|\bslow.*target\b|\bbad\s+accel(?:eration)?\b|\baccel(?:eration)?\s+bad\b", s):
     add_label(labels, "accel_too_lazy")
   if re.search(r"\bslow catch[- ]?up\b|\bslow .*catch[- ]?up\b", s):
     add_label(labels, "accel_too_lazy")
@@ -656,19 +722,20 @@ def normalize_labels(text: str) -> set[str]:
     add_label(labels, "accel_target_gap")
   if re.search(r"\btarget speed\b|\bget to set speed\b|\bspeed deficit\b", s):
     add_label(labels, "accel_target_gap")
-  if re.search(r"\bbad .*brak|\bbrak.*bad|\bmissed brak|\bfailed brak|\bbrake too late\b|\bstop too late\b|\blate stop\b", s):
+  if re.search(r"\bbad\s+(lead\s+)?brak|\bbrak(?:e|ing)?\s+bad\b|\bmissed brak|\bfailed brak|\bbrake too late\b|\bstop too late\b|\blate stop\b", s):
     add_label(labels, "braking_bad")
   if re.search(r"\bbrake too late\b|\bstop too late\b|\blate stop\b|\bbad late stop\b", s):
     add_label(labels, "braking_late")
-  if re.search(r"\bbrak(e|ing) too early\b|\bstopping too early\b|\bover[- ]?brak|\bover committing to stop\b|\btoo early\b|\bnot a full stop\b|\brolling kind of stop\b", s):
+  if re.search(r"\bbrak(e|ing) too early\b|\bstopping too early\b|\bover[- ]?brak|\bover[- ]?committ?ing (to )?(brak|stop)|\btoo early\b|\bnot a full stop\b|\brolling kind of stop\b", s):
     add_label(labels, "braking_early")
-  if re.search(r"\bover[- ]?brak|\bover committing to stop\b|\bmore of a roll\b|\brolling kind of stop\b|\bnot a full stop\b", s):
+  if re.search(r"\bover[- ]?brak|\bover[- ]?committ?ing (to )?(brak|stop)|\bmore of a roll\b|\brolling kind of stop\b|\bnot a full stop\b", s):
     add_label(labels, "unnecessary_braking")
+    add_label(labels, "overbraked_rolling_traffic")
     add_label(labels, "quality_bad")
   if re.search(r"\bno brake\b|\bno braking\b", s):
     add_label(labels, "braking_absent")
     add_label(labels, "braking_bad")
-  if re.search(r"\bmissed stop\b|\bfailed stop\b|\bdid not stop\b|\bnot stopping\b", s):
+  if re.search(r"\bmiss(?:ed)? stop\b|\bfailed stop\b|\bdid not stop\b|\bnot stopping\b", s):
     add_label(labels, "missed_stop")
   if "stop sign" in s or "traffic light" in s:
     add_label(labels, "traffic_control_context")
@@ -708,12 +775,30 @@ def normalize_labels(text: str) -> set[str]:
     add_label(labels, "low_speed_lateral_bad")
   if re.search(r"\b(good|smooth)\b.*\b(steer|lateral|turn)|\b(steer|lateral|turn).*\b(good|smooth)\b", s):
     add_label(labels, "steering_good")
+  if re.search(r"\bgood\s+lane\s+centering\b|\bsmooth\s+lane\s+centering\b", s):
+    add_label(labels, "steering_good")
   if "steering_jerk" in labels and "blocky" in s and not explicit_good_steering(s):
     labels.discard("steering_good")
   if "lane change" in s and ("good" in s or "smooth" in s):
     add_label(labels, "lane_change_good")
   if "follow distance" in s and "good" in s:
     add_label(labels, "follow_distance_good")
+  if re.search(r"\baggressive\s+follow\s+distance\b", s):
+    add_label(labels, "follow_profile_aggressive")
+  if re.search(r"\bstandard\s+follow\s+distance\b", s):
+    add_label(labels, "follow_profile_standard")
+  for idx, word in enumerate(("one", "two", "three", "four"), start=1):
+    if re.search(rf"\bdistance\s+{word}\b|\bdistance\s+{idx}\b", s):
+      add_label(labels, f"follow_distance_setting_{idx}")
+  if "i don't like this distance" in s or "dont like this distance" in s:
+    add_label(labels, "follow_distance_bad")
+    add_label(labels, "quality_bad")
+    if "distance four" in s or "distance 4" in s:
+      add_label(labels, "follow_distance_too_far")
+  if re.search(r"\bfollow distance\s+too\s+far\b|\btoo\s+far\s+follow distance\b|\bfollowing\s+too\s+far\b", s):
+    add_label(labels, "follow_distance_too_far")
+    add_label(labels, "follow_distance_bad")
+    add_label(labels, "quality_bad")
   if re.search(r"\bbad follow distance\b|\bnot following\b", s):
     add_label(labels, "follow_distance_bad")
     add_label(labels, "quality_bad")
@@ -760,6 +845,10 @@ def label_family(label: str) -> str:
   if (
     label.startswith(("brake", "braking", "lead_", "resume_", "accel"))
     or "stop" in label
+    or "rolling_follow" in label
+    or label.startswith("pacing_")
+    or label.startswith("follow_profile_")
+    or label.startswith("follow_distance_setting_")
     or label in {
     "driver_gas",
     "driver_brake",
@@ -769,7 +858,10 @@ def label_family(label: str) -> str:
     "human_intervention_gas",
     "human_intervention_brake",
     "follow_distance_bad",
+    "follow_distance_good",
+    "follow_distance_too_far",
     "unnecessary_braking",
+    "overbraked_rolling_traffic",
     }
   ):
     return "longitudinal"
@@ -2013,6 +2105,8 @@ def main() -> int:
     "reviewed_training_routes_051": list(REVIEWED_TRAINING_ROUTES_051),
     "reviewed_training_routes_053": list(REVIEWED_TRAINING_ROUTES_053),
     "reviewed_training_routes_054": list(REVIEWED_TRAINING_ROUTES_054),
+    "reviewed_training_routes_055": list(REVIEWED_TRAINING_ROUTES_055),
+    "reviewed_training_routes_056": list(REVIEWED_TRAINING_ROUTES_056),
     "reviewed_training_routes": list(REVIEWED_TRAINING_ROUTES),
     "training_routes": list(TRAINING_ROUTES),
     "test_route": TEST_ROUTE,
