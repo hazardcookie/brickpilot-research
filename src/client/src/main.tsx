@@ -742,11 +742,11 @@ function SignalTimeline({
 }
 
 function TrendLineChart({ points }: { points: MlDriveTrendPoint[] }) {
-  if (points.length < 2) return <p className="muted">More post-drive runs are needed for a trend line.</p>;
-  const width = 760;
-  const height = 210;
-  const padX = 38;
-  const padY = 24;
+  if (points.length < 2) return <p className="muted">More post-drive runs are needed.</p>;
+  const width = 260;
+  const height = 132;
+  const padX = 18;
+  const padY = 18;
   const plotW = width - padX * 2;
   const plotH = height - padY * 2;
   const metrics: Array<{ key: keyof MlDriveTrendPoint; label: string; color: string }> = [
@@ -756,36 +756,49 @@ function TrendLineChart({ points }: { points: MlDriveTrendPoint[] }) {
     { key: "gas_pressed_frac", label: "gas", color: "#56d4dd" }
   ];
   const xFor = (index: number) => padX + (points.length === 1 ? 0 : (index / (points.length - 1)) * plotW);
-  const yFor = (value: number) => padY + plotH - Math.max(0, Math.min(1, value)) * plotH;
   return (
-    <div className="trendChartWrap">
-      <svg className="trendChart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Recent post-drive context trend">
-        {[0, 0.25, 0.5, 0.75, 1].map((tick) => (
-          <g key={tick}>
-            <line x1={padX} x2={width - padX} y1={yFor(tick)} y2={yFor(tick)} />
-            <text x="6" y={yFor(tick) + 4}>{fmtPct(tick)}</text>
-          </g>
+    <div className="trendSmallMultiples">
+      {metrics.map((metric) => {
+        const values = points.map((point) => Number(point[metric.key] || 0));
+        const rawMin = Math.min(...values);
+        const rawMax = Math.max(...values);
+        const spread = Math.max(rawMax - rawMin, 0.01);
+        const min = Math.max(0, rawMin - spread * 0.35);
+        const max = Math.min(1, rawMax + spread * 0.25);
+        const yFor = (value: number) => padY + plotH - ((Math.max(min, Math.min(max, value)) - min) / Math.max(0.001, max - min)) * plotH;
+        const linePath = values.map((value, index) => `${index === 0 ? "M" : "L"} ${xFor(index).toFixed(1)} ${yFor(value).toFixed(1)}`).join(" ");
+        const areaPath = `${linePath} L ${xFor(values.length - 1).toFixed(1)} ${height - padY} L ${xFor(0).toFixed(1)} ${height - padY} Z`;
+        const latest = values[values.length - 1] || 0;
+        return (
+          <article className="trendMiniCard" key={metric.key}>
+            <div className="trendMiniHead">
+              <span><i style={{ background: metric.color }} />{metric.label}</span>
+              <strong>{fmtPct(latest, 1)}</strong>
+            </div>
+            <svg className="trendMiniChart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${metric.label} recent drive mix`}>
+              {[min, min + (max - min) / 2, max].map((tick) => (
+                <g key={tick}>
+                  <line x1={padX} x2={width - padX} y1={yFor(tick)} y2={yFor(tick)} />
+                  <text x={width - padX + 4} y={yFor(tick) + 4}>{fmtPct(tick)}</text>
+                </g>
+              ))}
+              <path className="trendArea" d={areaPath} fill={metric.color} />
+              <path d={linePath} fill="none" stroke={metric.color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+              {points.map((point, index) => (
+                <circle key={`${metric.key}-${point.route_id}`} cx={xFor(index)} cy={yFor(values[index] || 0)} r={index === points.length - 1 ? 4 : 2.7} fill={metric.color}>
+                  <title>{metric.label} · {fmtPct(values[index] || 0, 1)} · {point.brickpilot_version || shortRoute(point.route_id)}</title>
+                </circle>
+              ))}
+              <text className="xLabel" x={padX} y={height - 3}>{points[0]?.brickpilot_version || shortRoute(points[0]?.route_id)}</text>
+              <text className="xLabel" x={width - padX} y={height - 3} textAnchor="end">{points[points.length - 1]?.brickpilot_version || shortRoute(points[points.length - 1]?.route_id)}</text>
+            </svg>
+          </article>
+        );
+      })}
+      <div className="trendRunStrip">
+        {points.map((point) => (
+          <span key={point.route_id} title={point.route_id}>{point.brickpilot_version || shortRoute(point.route_id)}</span>
         ))}
-        {points.map((point, index) => (
-          <text className="xLabel" key={point.route_id} x={xFor(index)} y={height - 4} textAnchor={index === 0 ? "start" : index === points.length - 1 ? "end" : "middle"}>
-            {point.brickpilot_version || shortRoute(point.route_id)}
-          </text>
-        ))}
-        {metrics.map((metric) => {
-          const d = points.map((point, index) => {
-            const value = Number(point[metric.key] || 0);
-            return `${index === 0 ? "M" : "L"} ${xFor(index).toFixed(1)} ${yFor(value).toFixed(1)}`;
-          }).join(" ");
-          return <path key={metric.key} d={d} fill="none" stroke={metric.color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />;
-        })}
-        {metrics.map((metric) => points.map((point, index) => (
-          <circle key={`${metric.key}-${point.route_id}`} cx={xFor(index)} cy={yFor(Number(point[metric.key] || 0))} r="3" fill={metric.color}>
-            <title>{metric.label} · {fmtPct(Number(point[metric.key] || 0), 1)} · {shortRoute(point.route_id)}</title>
-          </circle>
-        )))}
-      </svg>
-      <div className="trendLegend">
-        {metrics.map((metric) => <span key={metric.key}><i style={{ background: metric.color }} />{metric.label}</span>)}
       </div>
     </div>
   );

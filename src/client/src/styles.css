@@ -854,52 +854,89 @@ output, .muted {
   border-radius: inherit;
 }
 
-.trendChartWrap {
-  min-width: 0;
-  overflow: auto;
+.trendSmallMultiples {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
-.trendChart {
+.trendMiniCard {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-3);
+}
+
+.trendMiniHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.trendMiniHead span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.trendMiniHead i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.trendMiniHead strong {
+  color: var(--text);
+  font-size: 18px;
+}
+
+.trendMiniChart {
   display: block;
-  min-width: 560px;
   width: 100%;
   height: auto;
 }
 
-.trendChart line {
-  stroke: rgba(148, 163, 184, .16);
+.trendMiniChart line {
+  stroke: rgba(148, 163, 184, .14);
   stroke-width: 1;
 }
 
-.trendChart text {
+.trendMiniChart text {
   fill: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
-.trendChart .xLabel {
+.trendMiniChart .xLabel {
   fill: #c9d1d9;
   font-weight: 700;
 }
 
-.trendLegend {
+.trendArea {
+  opacity: .15;
+}
+
+.trendRunStrip {
+  grid-column: 1 / -1;
   display: flex;
-  gap: 12px;
+  gap: 5px;
   flex-wrap: wrap;
-  margin-top: 8px;
+  margin-top: 2px;
 }
 
-.trendLegend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.trendRunStrip span {
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #0b121c;
   color: var(--muted);
-  font-size: 12px;
-}
-
-.trendLegend i {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .comparisonGrid {
@@ -1281,6 +1318,7 @@ output, .muted {
   .statStrip,
   .visualGrid,
   .focusGrid,
+  .trendSmallMultiples,
   .comparisonGrid,
   .splitGrid {
     grid-template-columns: 1fr;
