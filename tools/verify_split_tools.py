@@ -16,8 +16,10 @@ DATA_ROOT = Path(os.environ.get("BRICKPILOT_DATA_ROOT", Path.home() / "Brickpilo
 DB_CONFIG = Path(os.environ.get("BRICKPILOT_DRIVE_DB_CONFIG", Path.home() / ".config" / "brickpilot" / "drive_db.toml")).expanduser().resolve()
 
 for root in (REPO_ROOT, TOOLS_ROOT):
-  if str(root) not in sys.path:
-    sys.path.insert(0, str(root))
+  while str(root) in sys.path:
+    sys.path.remove(str(root))
+for root in (REPO_ROOT, TOOLS_ROOT):
+  sys.path.insert(0, str(root))
 
 
 def module_path(module: Any) -> str:

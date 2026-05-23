@@ -16,6 +16,19 @@ Use `BRICKPILOT_REPO_ROOT=/Users/brick/comma-dev/brickpilot` and
 `BRICKPILOT_PYTHON=/Users/brick/.config/brickpilot/python` for tools that need
 the runtime checkout.
 
+## 0.5.8 Tooling Optimization Audit
+
+The 0.5.8 research tooling pass is recorded in
+`docs/BRICKPILOT_OPTIMIZATION_AUDIT.md`, with benchmark commands, output parity
+checks, and verification results. The key measured result was reducing the
+voice-labeler fast-CV run from 1166.71s to 400.50s on the real local DriveDB
+route set, a 65.7% wall-time reduction and 2.91x speedup with byte-for-byte
+parity for the generated CSV/JSON/JSONL analysis artifacts.
+
+Keep the conservative worker defaults unless memory pressure says otherwise:
+use `--train-workers 1 --cv-workers 1` for serial parity debugging, or the
+default 4-worker path for normal M4 MacBook Pro R&D runs.
+
 ## Standard Post-Drive Flow
 
 1. Ingest the route through the UI or ingest scripts.

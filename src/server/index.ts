@@ -189,7 +189,7 @@ app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     brand: "Brickpilot",
-    version: "0.5.6",
+    version: "0.5.8",
     repo_root: paths.repoRoot,
     tools_root: paths.toolsRoot,
     data_root: paths.dataRoot,
