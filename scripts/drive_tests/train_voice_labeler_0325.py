@@ -10,6 +10,8 @@ import os
 import re
 import statistics
 import sys
+import time
+from concurrent.futures import ProcessPoolExecutor
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -461,6 +463,22 @@ class Model:
   neg_count: int
   feature_stats: list[dict[str, float]]
   threshold: float
+
+
+@dataclass
+class RunningStat:
+  count: int = 0
+  total: float = 0.0
+  min_value: float = math.inf
+  max_value: float = -math.inf
+
+  def add(self, value: float) -> None:
+    self.count += 1
+    self.total += value
+    if value < self.min_value:
+      self.min_value = value
+    if value > self.max_value:
+      self.max_value = value
 
 
 def clean_text(text: str) -> str:
@@ -1334,7 +1352,7 @@ def add_can_features(
   bus_placeholders = ",".join("?" for _ in CAN_BUSES)
   for route_id, route_windows in windows_by_route.items():
     info = infos[route_id]
-    accum: list[dict[str, list[float]]] = [defaultdict(list) for _ in route_windows]
+    accum: list[dict[str, RunningStat]] = [dict() for _ in route_windows]
     rows = store.execute(
       f"""SELECT t_sec, bus, address, data_hex
           FROM can_frames_sampled
@@ -1356,24 +1374,34 @@ def add_can_features(
       last = min(len(route_windows) - 1, int(math.floor(t_sec / step_sec)) + 1)
       bus = int(row["bus"])
       addr = int(row["address"])
+      prefix = f"can_bus{bus}_addr{addr:03x}"
       for idx in range(first, last + 1):
         win = route_windows[idx]
         if win.start_sec <= t_sec <= win.end_sec:
-          prefix = f"can_bus{bus}_addr{addr:03x}"
-          accum[idx][f"{prefix}_count"].append(1.0)
+          count_key = f"{prefix}_count"
+          count_stat = accum[idx].get(count_key)
+          if count_stat is None:
+            count_stat = RunningStat()
+            accum[idx][count_key] = count_stat
+          count_stat.add(1.0)
           for bidx, bval in enumerate(payload[:MAX_CAN_BYTES]):
-            accum[idx][f"{prefix}_b{bidx:02d}"].append(float(bval))
+            key = f"{prefix}_b{bidx:02d}"
+            stat = accum[idx].get(key)
+            if stat is None:
+              stat = RunningStat()
+              accum[idx][key] = stat
+            stat.add(float(bval))
     for idx, stats in enumerate(accum):
       feats = windows_by_route[route_id][idx].features
-      for key, vals in stats.items():
+      for key, stat in stats.items():
         if key.endswith("_count"):
-          feats[key] = float(len(vals))
+          feats[key] = float(stat.count)
           continue
-        if not vals:
+        if stat.count <= 0:
           continue
-        mean = sum(vals) / len(vals)
+        mean = stat.total / stat.count
         feats[f"{key}_mean"] = mean
-        feats[f"{key}_range"] = max(vals) - min(vals)
+        feats[f"{key}_range"] = stat.max_value - stat.min_value
 
 
 def feature_names(windows: list[Window]) -> list[str]:
@@ -1489,16 +1517,48 @@ def train_one_model(
   return temp_model
 
 
-def train_models(windows: list[Window], names: list[str], min_pos: int = 3) -> dict[str, Model]:
+_MODEL_WORKER_CONTEXT: dict[str, Any] = {}
+
+
+def _init_model_worker(train_windows: list[Window], names: list[str], min_pos: int) -> None:
+  _MODEL_WORKER_CONTEXT.clear()
+  _MODEL_WORKER_CONTEXT.update({
+    "train_windows": train_windows,
+    "names": names,
+    "min_pos": min_pos,
+  })
+
+
+def _train_model_worker(target: str) -> tuple[str, Model | None]:
+  return target, train_one_model(
+    target,
+    _MODEL_WORKER_CONTEXT["train_windows"],
+    _MODEL_WORKER_CONTEXT["names"],
+    _MODEL_WORKER_CONTEXT["min_pos"],
+  )
+
+
+def train_models(windows: list[Window], names: list[str], min_pos: int = 3, workers: int = 1) -> dict[str, Model]:
   train_routes = set(TRAINING_ROUTES)
   train_windows = [w for w in windows if w.route_id in train_routes]
   counts = target_counts(train_windows)
   targets = sorted(label for label, count in counts.items() if count >= min_pos and label != "narration_other")
   models: dict[str, Model] = {}
-  for target in targets:
-    model = train_one_model(target, train_windows, names, min_pos)
-    if model is not None:
-      models[target] = model
+  worker_count = max(1, min(int(workers or 1), len(targets)))
+  if worker_count > 1:
+    with ProcessPoolExecutor(
+      max_workers=worker_count,
+      initializer=_init_model_worker,
+      initargs=(train_windows, names, min_pos),
+    ) as executor:
+      for target, model in executor.map(_train_model_worker, targets, chunksize=1):
+        if model is not None:
+          models[target] = model
+  else:
+    for target in targets:
+      model = train_one_model(target, train_windows, names, min_pos)
+      if model is not None:
+        models[target] = model
   return models
 
 
@@ -1528,20 +1588,130 @@ def score_window(model: Model, win: Window) -> float:
 
 
 def auc_score(labels: list[int], scores: list[float]) -> float | None:
-  pos = [s for y, s in zip(labels, scores) if y]
-  neg = [s for y, s in zip(labels, scores) if not y]
-  if not pos or not neg:
+  pos_count = sum(1 for y in labels if y)
+  neg_count = len(labels) - pos_count
+  if not pos_count or not neg_count:
     return None
-  wins = 0.0
-  total = 0.0
-  for p in pos:
-    for n in neg:
-      total += 1.0
-      if p > n:
-        wins += 1.0
-      elif p == n:
-        wins += 0.5
-  return wins / total if total else None
+  pairs = sorted(zip(scores, labels), key=lambda item: item[0])
+  rank_sum = 0.0
+  rank = 1
+  i = 0
+  while i < len(pairs):
+    j = i + 1
+    while j < len(pairs) and pairs[j][0] == pairs[i][0]:
+      j += 1
+    avg_rank = (rank + rank + (j - i) - 1) / 2.0
+    rank_sum += sum(1 for _, y in pairs[i:j] if y) * avg_rank
+    rank += j - i
+    i = j
+  return (rank_sum - pos_count * (pos_count + 1) / 2.0) / (pos_count * neg_count)
+
+
+def default_cv_workers() -> int:
+  raw = os.environ.get("BRICKPILOT_CV_WORKERS")
+  if raw:
+    try:
+      return max(1, int(raw))
+    except ValueError:
+      pass
+  return max(1, min(4, (os.cpu_count() or 2) - 1))
+
+
+def _cross_validate_target_row(
+  train: list[Window],
+  eval_windows: list[Window],
+  counts: Counter[str],
+  names: list[str],
+  min_pos: int,
+  min_eval_pos: int,
+  holdout: str,
+  target: str,
+) -> dict[str, Any] | None:
+  count = counts.get(target, 0)
+  if count < min_pos or target == "narration_other":
+    return None
+  positives_eval = sum(1 for w in eval_windows if target in w.labels)
+  if positives_eval < min_eval_pos:
+    return None
+  model = train_one_model(target, train, names, min_pos)
+  if model is None:
+    return None
+  scores = [score_window(model, w) for w in eval_windows]
+  label_values = [1 if target in w.labels else 0 for w in eval_windows]
+  auc = auc_score(label_values, scores)
+  pos_scores = [s for y, s in zip(label_values, scores) if y]
+  neg_scores = [s for y, s in zip(label_values, scores) if not y]
+  ranked = sorted(zip(scores, label_values), reverse=True)
+  top_k = max(1, min(len(ranked), positives_eval * 2))
+  recall_top = sum(y for _, y in ranked[:top_k]) / positives_eval
+  return {
+    "holdout_route": holdout,
+    "target": target,
+    "train_pos_windows": count,
+    "eval_pos_windows": positives_eval,
+    "eval_windows": len(eval_windows),
+    "auc": auc if auc is not None else "",
+    "mean_pos_score": sum(pos_scores) / len(pos_scores) if pos_scores else "",
+    "mean_neg_score": sum(neg_scores) / len(neg_scores) if neg_scores else "",
+    "recall_at_2x_pos": recall_top,
+    "threshold": model.threshold,
+  }
+
+
+def _cross_validate_holdout_rows(
+  train_windows_all: list[Window],
+  windows_by_route: dict[str, list[Window]],
+  names: list[str],
+  min_pos: int,
+  min_eval_pos: int,
+  holdout: str,
+  targets: list[str],
+) -> list[dict[str, Any]]:
+  eval_windows = windows_by_route.get(holdout, [])
+  if not eval_windows:
+    return []
+  train = [w for w in train_windows_all if w.route_id != holdout]
+  counts = target_counts(train)
+  rows: list[dict[str, Any]] = []
+  for target in targets:
+    row = _cross_validate_target_row(train, eval_windows, counts, names, min_pos, min_eval_pos, holdout, target)
+    if row is not None:
+      rows.append(row)
+  return rows
+
+
+_CV_WORKER_CONTEXT: dict[str, Any] = {}
+
+
+def _init_cv_worker(
+  train_windows_all: list[Window],
+  windows_by_route: dict[str, list[Window]],
+  names: list[str],
+  min_pos: int,
+  min_eval_pos: int,
+  targets: list[str],
+) -> None:
+  _CV_WORKER_CONTEXT.clear()
+  _CV_WORKER_CONTEXT.update({
+    "train_windows_all": train_windows_all,
+    "windows_by_route": windows_by_route,
+    "names": names,
+    "min_pos": min_pos,
+    "min_eval_pos": min_eval_pos,
+    "targets": targets,
+  })
+
+
+def _cross_validate_worker(holdout: str) -> list[dict[str, Any]]:
+  return _cross_validate_holdout_rows(
+    _CV_WORKER_CONTEXT["train_windows_all"],
+    _CV_WORKER_CONTEXT["windows_by_route"],
+    _CV_WORKER_CONTEXT["names"],
+    _CV_WORKER_CONTEXT["min_pos"],
+    _CV_WORKER_CONTEXT["min_eval_pos"],
+    holdout,
+    _CV_WORKER_CONTEXT["targets"],
+  )
 
 
 def cv_target_sort_key(target: str, count: int) -> tuple[int, int, str]:
@@ -1594,6 +1764,7 @@ def cross_validate(
   min_eval_pos: int = 1,
   output_path: Path | None = None,
   progress: bool = False,
+  workers: int = 1,
 ) -> list[dict[str, Any]]:
   out: list[dict[str, Any]] = []
   train_route_set = set(TRAINING_ROUTES)
@@ -1606,6 +1777,19 @@ def cross_validate(
   for win in train_windows_all:
     windows_by_route[win.route_id].append(win)
   cv_targets = select_cv_targets(train_windows_all, min_pos, targets, max_targets)
+  tasks: list[str] = []
+  for holdout in route_order:
+    eval_windows = windows_by_route.get(holdout, [])
+    if not eval_windows:
+      continue
+    if progress:
+      print(f"[cv] holdout={holdout} targets={len(cv_targets)}", file=sys.stderr, flush=True)
+    tasks.append(holdout)
+  if not tasks:
+    return out
+  worker_count = max(1, min(int(workers or 1), len(tasks)))
+  if progress and worker_count > 1:
+    print(f"[cv] workers={worker_count} tasks={len(tasks)}", file=sys.stderr, flush=True)
   csv_file = None
   writer: csv.DictWriter | None = None
   if output_path is not None:
@@ -1615,48 +1799,27 @@ def cross_validate(
     writer.writeheader()
     csv_file.flush()
   try:
-    for holdout in route_order:
-      train = [w for w in train_windows_all if w.route_id != holdout]
-      eval_windows = windows_by_route.get(holdout, [])
-      if not eval_windows:
-        continue
-      if progress:
-        print(f"[cv] holdout={holdout} targets={len(cv_targets)}", file=sys.stderr, flush=True)
-      counts = target_counts(train)
-      for target in cv_targets:
-        count = counts.get(target, 0)
-        if count < min_pos or target == "narration_other":
-          continue
-        positives_eval = sum(1 for w in eval_windows if target in w.labels)
-        if positives_eval < min_eval_pos:
-          continue
-        model = train_one_model(target, train, names, min_pos)
-        if model is None:
-          continue
-        scores = [score_window(model, w) for w in eval_windows]
-        labels = [1 if target in w.labels else 0 for w in eval_windows]
-        auc = auc_score(labels, scores)
-        pos_scores = [s for y, s in zip(labels, scores) if y]
-        neg_scores = [s for y, s in zip(labels, scores) if not y]
-        ranked = sorted(zip(scores, labels), reverse=True)
-        top_k = max(1, min(len(ranked), positives_eval * 2))
-        recall_top = sum(y for _, y in ranked[:top_k]) / positives_eval
-        row = {
-          "holdout_route": holdout,
-          "target": target,
-          "train_pos_windows": count,
-          "eval_pos_windows": positives_eval,
-          "eval_windows": len(eval_windows),
-          "auc": auc if auc is not None else "",
-          "mean_pos_score": sum(pos_scores) / len(pos_scores) if pos_scores else "",
-          "mean_neg_score": sum(neg_scores) / len(neg_scores) if neg_scores else "",
-          "recall_at_2x_pos": recall_top,
-          "threshold": model.threshold,
-        }
-        out.append(row)
-        if writer is not None and csv_file is not None:
-          writer.writerow({k: json_safe(v) for k, v in row.items()})
-          csv_file.flush()
+    if worker_count > 1:
+      with ProcessPoolExecutor(
+        max_workers=worker_count,
+        initializer=_init_cv_worker,
+        initargs=(train_windows_all, dict(windows_by_route), names, min_pos, min_eval_pos, cv_targets),
+      ) as executor:
+        row_iter = executor.map(_cross_validate_worker, tasks, chunksize=1)
+        for rows in row_iter:
+          for row in rows:
+            out.append(row)
+            if writer is not None and csv_file is not None:
+              writer.writerow({k: json_safe(v) for k, v in row.items()})
+              csv_file.flush()
+    else:
+      for holdout in tasks:
+        rows = _cross_validate_holdout_rows(train_windows_all, windows_by_route, names, min_pos, min_eval_pos, holdout, cv_targets)
+        for row in rows:
+          out.append(row)
+          if writer is not None and csv_file is not None:
+            writer.writerow({k: json_safe(v) for k, v in row.items()})
+            csv_file.flush()
   finally:
     if csv_file is not None:
       csv_file.close()
@@ -2042,31 +2205,53 @@ def main() -> int:
   parser.add_argument("--min-pos", type=int, default=3)
   parser.add_argument("--max-can-model-features", type=int, default=700)
   parser.add_argument("--backup-dir", default=str(DEFAULT_BACKUP_DIR))
+  parser.add_argument("--train-workers", type=int, default=None, help="Parallel target-training workers. Defaults to BRICKPILOT_CV_WORKERS or a conservative local core count; use 1 for serial parity debugging.")
   parser.add_argument("--skip-cross-validation", action="store_true")
   parser.add_argument("--fast-cross-validation", action="store_true", help="Run a prioritized leave-one-route-out CV subset instead of every eligible target.")
   parser.add_argument("--cv-target", action="append", default=[], help="Specific target label to leave-one-route-out validate. May be repeated.")
   parser.add_argument("--cv-route", action="append", default=[], help="Specific holdout route to validate. May be repeated.")
   parser.add_argument("--cv-max-targets", type=int, default=None, help="Limit leave-one-route-out CV to the top N priority targets.")
   parser.add_argument("--cv-min-eval-pos", type=int, default=1, help="Minimum positive eval windows required for a target on a holdout route.")
+  parser.add_argument("--cv-workers", type=int, default=None, help="Parallel leave-one-route-out CV workers. Defaults to BRICKPILOT_CV_WORKERS or a conservative local core count; use 1 for serial parity debugging.")
   parser.add_argument("--cv-progress", action="store_true", help="Print leave-one-route-out CV progress to stderr.")
+  parser.add_argument("--timings", action="store_true", help="Print and record stage timings for benchmark runs.")
   parser.add_argument("--skip-can", action="store_true")
   args = parser.parse_args()
 
   out_dir = Path(args.output_root) / f"ml_040_beta_voice_labeler_{args.stamp}"
+  stage_timings: list[dict[str, Any]] = []
+  stage_start = time.perf_counter()
+
+  def mark_stage(name: str) -> None:
+    nonlocal stage_start
+    now = time.perf_counter()
+    elapsed = now - stage_start
+    stage_timings.append({"stage": name, "elapsed_sec": elapsed})
+    if args.timings or args.cv_progress:
+      print(f"[timing] {name} {elapsed:.2f}s", file=sys.stderr, flush=True)
+    stage_start = now
 
   store = DriveStore(load_config(args.config))
   infos = fetch_route_infos(store)
+  mark_stage("fetch_route_infos")
   backup_check = verify_voice_backup(Path(args.backup_dir), store, infos)
+  mark_stage("verify_voice_backup")
   out_dir.mkdir(parents=True, exist_ok=True)
   atoms = fetch_voice_atoms(store, infos)
+  mark_stage("fetch_voice_atoms")
   windows = build_windows(store, infos, atoms, args.window_sec, args.step_sec, skip_can=args.skip_can)
+  mark_stage("build_windows")
   model_features = select_model_feature_names([w for w in windows if w.route_id in TRAINING_ROUTES], args.max_can_model_features)
-  models = train_models(windows, model_features, min_pos=args.min_pos)
+  mark_stage("select_model_features")
+  train_workers = args.train_workers if args.train_workers is not None else default_cv_workers()
+  models = train_models(windows, model_features, min_pos=args.min_pos, workers=train_workers)
+  mark_stage("train_models")
   cv_max_targets = args.cv_max_targets
   if args.fast_cross_validation and cv_max_targets is None and not args.cv_target:
     cv_max_targets = 32
   cv_targets = args.cv_target or None
   cv_routes = args.cv_route or None
+  cv_workers = args.cv_workers if args.cv_workers is not None else default_cv_workers()
   eval_rows = [] if args.skip_cross_validation else cross_validate(
     windows,
     model_features,
@@ -2077,10 +2262,13 @@ def main() -> int:
     min_eval_pos=args.cv_min_eval_pos,
     output_path=out_dir / "model_eval_leave_one_route.csv",
     progress=args.cv_progress,
+    workers=cv_workers,
   )
+  mark_stage("cross_validate")
   all_test_predictions = predictions_for_route(windows, models, TEST_ROUTE, args.step_sec)
   test_predictions = review_candidate_predictions(all_test_predictions)
   can_rows = can_candidate_rows(models)
+  mark_stage("score_predictions")
 
   write_csv(out_dir / "route_summary.csv", route_summary_rows(infos, atoms, windows))
   write_csv(out_dir / "voice_label_corpus.csv", corpus_rows(atoms))
@@ -2092,6 +2280,7 @@ def main() -> int:
   write_csv(out_dir / "test_route_predictions.csv", test_predictions)
   write_csv(out_dir / "test_route_predictions_all.csv", all_test_predictions)
   write_csv(out_dir / "can_signal_candidates.csv", can_rows)
+  mark_stage("write_artifacts")
 
   run_summary = {
     "title": "Brickpilot 0.4.0-beta voice labeler ML pass",
@@ -2119,6 +2308,7 @@ def main() -> int:
     "step_sec": args.step_sec,
     "model_feature_count": len(model_features),
     "max_can_model_features": args.max_can_model_features,
+    "train_workers": train_workers,
     "cross_validation_skipped": bool(args.skip_cross_validation),
     "cross_validation_fast": bool(args.fast_cross_validation),
     "cross_validation_rows": len(eval_rows),
@@ -2126,6 +2316,7 @@ def main() -> int:
     "cross_validation_routes_requested": list(args.cv_route),
     "cross_validation_max_targets": cv_max_targets,
     "cross_validation_min_eval_pos": args.cv_min_eval_pos,
+    "cross_validation_workers": 0 if args.skip_cross_validation else cv_workers,
     "cross_validation_incremental_output": str(out_dir / "model_eval_leave_one_route.csv"),
     "voice_atomic_labels": len(atoms),
     "canonical_label_count": len(set(a.canonical_label for a in atoms)),
@@ -2134,6 +2325,7 @@ def main() -> int:
     "test_prediction_all_count": len(all_test_predictions),
     "test_high_confidence_count": sum(1 for r in test_predictions if float(r["peak_score"]) >= 0.70),
     "can_candidate_count": len(can_rows),
+    "stage_timings": stage_timings,
     "artifacts": sorted(p.name for p in out_dir.iterdir() if p.is_file()),
   }
   (out_dir / "run_summary.json").write_text(json.dumps(json_safe(run_summary), indent=2, sort_keys=True), encoding="utf-8")

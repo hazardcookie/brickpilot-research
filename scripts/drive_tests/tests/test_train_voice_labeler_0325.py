@@ -15,10 +15,12 @@ from scripts.drive_tests.train_voice_labeler_0325 import (
   VALIDATION_ROUTES,
   VALIDATION_ROUTES_0330,
   Window,
+  auc_score,
   cross_validate,
   label_family,
   label_polarity,
   normalize_labels,
+  train_models,
 )
 
 
@@ -339,3 +341,81 @@ def test_cross_validate_can_stream_targeted_rows(tmp_path) -> None:
   text = out.read_text()
   assert "holdout_route,target,train_pos_windows" in text
   assert f"{route_a},steering_jerk" in text
+
+
+def test_auc_score_matches_pairwise_definition_with_ties() -> None:
+  labels = [1, 0, 1, 0, 1, 0]
+  scores = [0.7, 0.2, 0.5, 0.5, 0.2, 0.2]
+  positives = [score for label, score in zip(labels, scores) if label]
+  negatives = [score for label, score in zip(labels, scores) if not label]
+  wins = 0.0
+  total = 0.0
+  for pos in positives:
+    for neg in negatives:
+      total += 1.0
+      if pos > neg:
+        wins += 1.0
+      elif pos == neg:
+        wins += 0.5
+
+  assert auc_score(labels, scores) == wins / total
+
+
+def test_parallel_cross_validate_matches_serial_rows(tmp_path) -> None:
+  route_a = "0000018e--5d3d27b763"
+  route_b = "00000197--a5c011c5f6"
+
+  def window(route_id: str, idx: int, labels: set[str], metric: float) -> Window:
+    return Window(
+      route_id=route_id,
+      role="label_validation",
+      start_sec=idx * 3.0,
+      end_sec=idx * 3.0 + 6.0,
+      center_sec=idx * 3.0 + 3.0,
+      features={"metric": metric},
+      labels=labels,
+    )
+
+  windows: list[Window] = []
+  windows.extend(window(route_a, i, {"steering_jerk"}, 10.0) for i in range(3))
+  windows.extend(window(route_a, i + 3, set(), 0.0) for i in range(18))
+  windows.extend(window(route_b, i, {"steering_jerk"}, 9.0) for i in range(3))
+  windows.extend(window(route_b, i + 3, set(), 0.0) for i in range(18))
+
+  kwargs = {
+    "min_pos": 2,
+    "holdout_routes": [route_a, route_b],
+    "targets": ["steering_jerk"],
+  }
+  serial = cross_validate(windows, ["metric"], output_path=tmp_path / "serial.csv", workers=1, **kwargs)
+  parallel = cross_validate(windows, ["metric"], output_path=tmp_path / "parallel.csv", workers=2, **kwargs)
+
+  assert parallel == serial
+  assert (tmp_path / "parallel.csv").read_text() == (tmp_path / "serial.csv").read_text()
+
+
+def test_parallel_train_models_matches_serial_models() -> None:
+  route_a = "0000018e--5d3d27b763"
+  route_b = "00000197--a5c011c5f6"
+
+  def window(route_id: str, idx: int, labels: set[str], metric: float) -> Window:
+    return Window(
+      route_id=route_id,
+      role="label_validation",
+      start_sec=idx * 3.0,
+      end_sec=idx * 3.0 + 6.0,
+      center_sec=idx * 3.0 + 3.0,
+      features={"metric": metric},
+      labels=labels,
+    )
+
+  windows: list[Window] = []
+  windows.extend(window(route_a, i, {"steering_jerk"}, 10.0) for i in range(3))
+  windows.extend(window(route_a, i + 3, set(), 0.0) for i in range(18))
+  windows.extend(window(route_b, i, {"steering_jerk"}, 9.0) for i in range(3))
+  windows.extend(window(route_b, i + 3, set(), 0.0) for i in range(18))
+
+  serial = train_models(windows, ["metric"], min_pos=2, workers=1)
+  parallel = train_models(windows, ["metric"], min_pos=2, workers=2)
+
+  assert parallel == serial

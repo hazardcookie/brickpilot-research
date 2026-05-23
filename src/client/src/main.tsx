@@ -319,7 +319,7 @@ function App() {
       <header className="topbar">
         <div className="brand">
           <strong>Brickpilot</strong>
-          <span>0.5.6</span>
+          <span>0.5.8</span>
         </div>
         <nav aria-label="Brickpilot tools">
           {[

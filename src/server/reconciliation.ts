@@ -9,6 +9,7 @@ const REPORT_EXTENSIONS = new Set([".md", ".json", ".yaml", ".yml", ".csv", ".tx
 const DEFAULT_MAX_DEPTH = 8;
 const DEFAULT_MAX_REPORTS = Number(process.env.BRICKPILOT_RECONCILE_MAX_REPORTS || 5000);
 const DEFAULT_MAX_ENTRIES = Number(process.env.BRICKPILOT_RECONCILE_MAX_FILES || 50000);
+const DEFAULT_SCAN_CONCURRENCY = Number(process.env.BRICKPILOT_RECONCILE_SCAN_CONCURRENCY || 8);
 const PREVIEW_BYTES = 16 * 1024;
 const CACHE_MS = Number(process.env.BRICKPILOT_RECONCILE_CACHE_MS || process.env.BRICKPILOT_RECONCILIATION_CACHE_MS || 30000);
 
@@ -213,21 +214,29 @@ export function reportsForRide(
 export function mergeDiscoveredRides(rides: RideRow[], catalog: DataCatalog): RideRow[] {
   const byRoute = new Map(rides.map((ride) => [ride.route_id.toLowerCase(), ride]));
   const byUuid = new Map(rides.map((ride) => [ride.id.toLowerCase(), ride]));
-  const routeIds = new Set<string>();
-  for (const report of catalog.reports) for (const routeId of report.route_ids) routeIds.add(routeId);
-  for (const source of catalog.sources) routeIds.add(source.route_id);
+  const reportsByRoute = new Map<string, CatalogReport[]>();
+  const sourcesByRoute = new Map<string, CatalogSource[]>();
+  for (const report of catalog.reports) {
+    for (const routeId of report.route_ids) {
+      reportsByRoute.set(routeId, [...(reportsByRoute.get(routeId) || []), report]);
+    }
+  }
+  for (const source of catalog.sources) {
+    sourcesByRoute.set(source.route_id, [...(sourcesByRoute.get(source.route_id) || []), source]);
+  }
+  const routeIds = new Set<string>([...reportsByRoute.keys(), ...sourcesByRoute.keys()]);
 
   for (const ride of rides) {
     const routeId = ride.route_id.toLowerCase();
-    const reports = catalog.reports.filter((report) => report.route_ids.includes(routeId));
-    const sources = catalog.sources.filter((source) => source.route_id === routeId);
+    const reports = reportsByRoute.get(routeId) || [];
+    const sources = sourcesByRoute.get(routeId) || [];
     applyDiscovery(ride, reports, sources, false);
   }
 
   for (const routeId of routeIds) {
     if (byRoute.has(routeId) || byUuid.has(routeId)) continue;
-    const reports = catalog.reports.filter((report) => report.route_ids.includes(routeId));
-    const sources = catalog.sources.filter((source) => source.route_id === routeId);
+    const reports = reportsByRoute.get(routeId) || [];
+    const sources = sourcesByRoute.get(routeId) || [];
     if (!reports.length && !sources.length) continue;
     const row: RideRow = {
       id: `external:${routeId}`,
@@ -351,13 +360,28 @@ async function dirExistsInside(paths: BrickpilotPaths, dirPath: string): Promise
   }
 }
 
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  let next = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      out[index] = await fn(items[index]);
+    }
+  }));
+  return out;
+}
+
 async function scanRawImportSources(paths: BrickpilotPaths, root: string, maxEntries: number): Promise<CatalogSource[]> {
-  const out: CatalogSource[] = [];
+  const candidates: Array<{ route_id: string; sourcePath: string }> = [];
   let dir;
   try {
     dir = await fsp.opendir(assertInsideDataRoot(paths, root));
   } catch {
-    return out;
+    return [];
   }
   let scanned = 0;
   for await (const entry of dir) {
@@ -365,10 +389,12 @@ async function scanRawImportSources(paths: BrickpilotPaths, root: string, maxEnt
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     const routeIds = extractRouteIds(entry.name);
     if (routeIds.length !== 1 || routeIds[0] !== entry.name.toLowerCase()) continue;
-    const sourcePath = path.join(root, entry.name);
+    candidates.push({ route_id: routeIds[0], sourcePath: path.join(root, entry.name) });
+  }
+  return mapWithConcurrency(candidates, DEFAULT_SCAN_CONCURRENCY, async ({ route_id, sourcePath }) => {
     const stats = await statTree(paths, sourcePath, maxEntries);
-    out.push({
-      route_id: routeIds[0],
+    return {
+      route_id,
       kind: "raw_imports",
       path: sourcePath,
       relative_path: path.relative(paths.dataRoot, sourcePath),
@@ -377,9 +403,8 @@ async function scanRawImportSources(paths: BrickpilotPaths, root: string, maxEnt
       size_bytes: stats.sizeBytes,
       file_count: stats.fileCount,
       segment_count: await countSegmentDirs(paths, sourcePath)
-    });
-  }
-  return out;
+    };
+  });
 }
 
 async function countSegmentDirs(paths: BrickpilotPaths, sourcePath: string): Promise<number> {

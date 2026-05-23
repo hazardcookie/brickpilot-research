@@ -49,6 +49,7 @@ export BRICKPILOT_UI_BIND=0.0.0.0
 npm test
 npm run typecheck
 npm run build
+npm run bench:catalog
 PYTHONDONTWRITEBYTECODE=1 python3 -m pytest scripts/drive_tests/tests
 python3 tools/verify_split_tools.py
 ```
@@ -56,6 +57,11 @@ python3 tools/verify_split_tools.py
 Some Python tools need an openpilot/Brickpilot checkout and local route data.
 Set `BRICKPILOT_REPO_ROOT`, `BRICKPILOT_DATA_ROOT`, and
 `BRICKPILOT_DRIVE_DB_CONFIG` before running those workflows.
+
+See `docs/OPTIMIZATION_RND.md` for the current ML/CV and catalog benchmark
+commands used on the optimization branch. See
+`docs/BRICKPILOT_OPTIMIZATION_AUDIT.md` for the 0.5.8 optimization audit,
+speedup percentages, parity checks, and verification record.
 
 ## Data Boundary
 
